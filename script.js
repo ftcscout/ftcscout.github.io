@@ -168,7 +168,7 @@ function displayMatchData(matchData) {
         header.className = 'event-header';
         header.innerHTML = `
             <div class="event-title">
-                <span class="expand-icon">▼</span>
+                <span class="expand-icon" style="transform: rotate(180deg);">▼</span>
                 <h2>${eventCode}</h2>
             </div>
             <div class="event-stats">
@@ -178,8 +178,8 @@ function displayMatchData(matchData) {
         
         const matchesContainer = document.createElement('div');
         matchesContainer.id = `matches-${eventCode}`;
-        matchesContainer.className = 'matches-container hidden';
-        matchesContainer.style.display = 'none';
+        matchesContainer.className = 'matches-container';
+        matchesContainer.style.display = 'block';
         
         matchesContainer.innerHTML = eventData.matches.map(match => {
             const redScore = match.redScore?.totalPointsNp || match.redScore?.totalPoints || 0;
@@ -865,16 +865,26 @@ function showcaseFeatures() {
     if (!PRESENTATION.isActive) return;
 
     const eventHeaders = document.querySelectorAll('.event-header');
-    eventHeaders.forEach(header => {
-        const eventCode = header.closest('.event-section').querySelector('.matches-container').id.replace('matches-', '');
-        const matchesContainer = document.getElementById(`matches-${eventCode}`);
-        const expandIcon = header.querySelector('.expand-icon');
-        
-        if (matchesContainer.style.display === 'none') {
-            matchesContainer.style.display = 'block';
-            expandIcon.style.transform = 'rotate(180deg)';
+    let currentEventIndex = 0;
+
+    const animateDropdowns = () => {
+        if (currentEventIndex < eventHeaders.length) {
+            const header = eventHeaders[currentEventIndex];
+            const eventCode = header.closest('.event-section').querySelector('.matches-container').id.replace('matches-', '');
+            
+            toggleEventMatches(eventCode);
+            
+            setTimeout(() => {
+                toggleEventMatches(eventCode);
+                currentEventIndex++;
+                if (currentEventIndex < eventHeaders.length) {
+                    setTimeout(animateDropdowns, 1000);
+                }
+            }, 1000);
         }
-    });
+    };
+
+    setTimeout(animateDropdowns, 1000);
 
     const features = [
         {
