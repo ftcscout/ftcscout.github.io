@@ -864,28 +864,6 @@ function simulateTyping(text, callback) {
 function showcaseFeatures() {
     if (!PRESENTATION.isActive) return;
 
-    const eventHeaders = document.querySelectorAll('.event-header');
-    let currentEventIndex = 0;
-
-    const animateDropdowns = () => {
-        if (currentEventIndex < eventHeaders.length) {
-            const header = eventHeaders[currentEventIndex];
-            const eventCode = header.closest('.event-section').querySelector('.matches-container').id.replace('matches-', '');
-            
-            toggleEventMatches(eventCode);
-            
-            setTimeout(() => {
-                toggleEventMatches(eventCode);
-                currentEventIndex++;
-                if (currentEventIndex < eventHeaders.length) {
-                    setTimeout(animateDropdowns, 1000);
-                }
-            }, 1000);
-        }
-    };
-
-    setTimeout(animateDropdowns, 1000);
-
     const features = [
         {
             element: document.querySelector('#teamInfo'),
@@ -897,7 +875,27 @@ function showcaseFeatures() {
             element: document.querySelector('#stats-container'),
             duration: 5000,
             highlight: true,
-            description: 'Event Performance'
+            description: 'Event Performance',
+            onStart: () => {
+                const eventHeaders = document.querySelectorAll('.event-header');
+                eventHeaders.forEach(header => {
+                    const eventCode = header.closest('.event-section').querySelector('.matches-container').id.replace('matches-', '');
+                    const matchesContainer = document.getElementById(`matches-${eventCode}`);
+                    if (matchesContainer.style.display === 'none') {
+                        toggleEventMatches(eventCode);
+                    }
+                });
+            },
+            onEnd: () => {
+                const eventHeaders = document.querySelectorAll('.event-header');
+                eventHeaders.forEach(header => {
+                    const eventCode = header.closest('.event-section').querySelector('.matches-container').id.replace('matches-', '');
+                    const matchesContainer = document.getElementById(`matches-${eventCode}`);
+                    if (matchesContainer.style.display === 'block') {
+                        toggleEventMatches(eventCode);
+                    }
+                });
+            }
         },
         {
             element: document.querySelector('#analytics-container'),
@@ -927,6 +925,10 @@ function showcaseFeatures() {
 
         const feature = features[currentFeatureIndex];
 
+        if (feature.onStart) {
+            feature.onStart();
+        }
+
         feature.element.scrollIntoView({ 
             behavior: 'smooth', 
             block: 'center' 
@@ -943,6 +945,9 @@ function showcaseFeatures() {
         document.body.appendChild(description);
 
         setTimeout(() => {
+            if (feature.onEnd) {
+                feature.onEnd();
+            }
             currentFeatureIndex++;
             showNextFeature();
         }, feature.duration);
