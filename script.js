@@ -864,6 +864,18 @@ function simulateTyping(text, callback) {
 function showcaseFeatures() {
     if (!PRESENTATION.isActive) return;
 
+    const eventHeaders = document.querySelectorAll('.event-header');
+    eventHeaders.forEach(header => {
+        const eventCode = header.closest('.event-section').querySelector('.matches-container').id.replace('matches-', '');
+        const matchesContainer = document.getElementById(`matches-${eventCode}`);
+        const expandIcon = header.querySelector('.expand-icon');
+        
+        if (matchesContainer.style.display === 'none') {
+            matchesContainer.style.display = 'block';
+            expandIcon.style.transform = 'rotate(180deg)';
+        }
+    });
+
     const features = [
         {
             element: document.querySelector('#teamInfo'),
