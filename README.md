@@ -2,7 +2,7 @@
 
 MechaSearch is a modern, responsive web application designed to explore FIRST Tech Challenge (FTC) team statistics, match history, and performance analytics. Built with vanilla JavaScript and Chart.js, it provides an intuitive interface for accessing and visualizing FTC team data.
 
-![MechaSearch Screenshot](path/to/screenshot.png) <!-- You should add a screenshot of your app -->
+![Example](images/example.png)
 
 ## Features
 
