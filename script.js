@@ -28,6 +28,8 @@ let API_BASE_URL = MODES[currentMode].apiBase;
 
 const FRC_API_KEY = 'pUm7ONNd4VrNmelSO4ZX8Muf24gGn7xMI1VE8jeohY8ODZfEDZOlPuoahrHr9m57';
 
+const CORS_PROXY = 'https://cors-anywhere.herokuapp.com/';
+
 const DOM = {
     mainContent: document.querySelector('.main-content'),
     landingHeader: document.querySelector('.landing-header'),
@@ -129,25 +131,50 @@ async function searchTeam() {
     if (landingHeader) landingHeader.classList.add('searched');
 
     try {
-        const teamResponse = await fetch(`${API_BASE_URL}/teams/${teamNumber}`);
-        const basicTeamData = await teamResponse.json();
-        
-        createSeasonSelector(basicTeamData.rookieYear || 2024);
-        
-        const selectorContainer = document.getElementById('seasonSelectorContainer');
-        if (selectorContainer) {
-            selectorContainer.classList.remove('hidden');
-            selectorContainer.classList.add('visible');
-        }
-        
-        const selectedYear = document.getElementById('seasonSelector')?.value || 2024;
-        const teamData = await fetchTeamData(teamNumber, selectedYear);
-        const matchData = await fetchTeamMatches(teamNumber, selectedYear);
+        if (currentMode === 'ftc') {
+            const teamResponse = await fetch(`${API_BASE_URL}/teams/${teamNumber}`);
+            const basicTeamData = await teamResponse.json();
+            
+            createSeasonSelector(basicTeamData.rookieYear || 2024);
+            
+            const selectorContainer = document.getElementById('seasonSelectorContainer');
+            if (selectorContainer) {
+                selectorContainer.classList.remove('hidden');
+                selectorContainer.classList.add('visible');
+            }
+            
+            const selectedYear = document.getElementById('seasonSelector')?.value || 2024;
+            const teamData = await fetchTeamData(teamNumber, selectedYear);
+            const matchData = await fetchTeamMatches(teamNumber, selectedYear);
 
-        displayTeamInfo(teamData, matchData);
-        displayMatchData(matchData);
+            displayTeamInfo(teamData, matchData);
+            displayMatchData(matchData);
+        } else {
+            // FRC mode
+            createSeasonSelector(1992); // FRC starts from 1992
+            
+            const selectorContainer = document.getElementById('seasonSelectorContainer');
+            if (selectorContainer) {
+                selectorContainer.classList.remove('hidden');
+                selectorContainer.classList.add('visible');
+            }
+            
+            const selectedYear = document.getElementById('seasonSelector')?.value || 2024;
+            const teamData = await fetchTeamData(teamNumber, selectedYear);
+            const matchData = await fetchTeamMatches(teamNumber, selectedYear);
+
+            displayTeamInfo(teamData, matchData);
+            displayMatchData(matchData);
+        }
     } catch (error) {
         console.error('Error:', error);
+        
+        // Show user-friendly error message
+        const errorMessage = currentMode === 'frc' && error.message.includes('CORS') 
+            ? 'FRC data is temporarily unavailable due to API restrictions. Please try again later or use FTC mode.'
+            : `Error loading team data: ${error.message}`;
+            
+        alert(errorMessage);
     }
 }
 
@@ -329,30 +356,38 @@ async function fetchFRCTeamData(teamNumber, year) {
     };
     
     const teamKey = `frc${teamNumber}`;
-    const teamResponse = await fetch(`${API_BASE_URL}/team/${teamKey}`, { headers });
-    const teamData = await teamResponse.json();
-    console.log('FRC Team Data:', teamData);
+    
+    try {
+        const teamData = await makeFRCRequest(`${API_BASE_URL}/team/${teamKey}`, headers);
+        console.log('FRC Team Data:', teamData);
 
-    const eventsResponse = await fetch(`${API_BASE_URL}/team/${teamKey}/events/${year}`, { headers });
-    const eventsData = await eventsResponse.json();
-    console.log('FRC Events Data:', eventsData);
-    
-    const statsResponse = await fetch(`${API_BASE_URL}/team/${teamKey}/stats/${year}`, { headers });
-    const statsData = await statsResponse.json();
-    console.log('FRC Stats Data:', statsData);
-    
-    return {
-        number: teamNumber,
-        name: teamData.nickname || teamData.name,
-        city: teamData.city,
-        state: teamData.state_prov,
-        country: teamData.country,
-        rookieYear: teamData.rookie_year,
-        stats: {
-            ...statsData,
-            events: eventsData
+        const eventsData = await makeFRCRequest(`${API_BASE_URL}/team/${teamKey}/events/${year}`, headers);
+        console.log('FRC Events Data:', eventsData);
+        
+        let statsData = {};
+        try {
+            statsData = await makeFRCRequest(`${API_BASE_URL}/team/${teamKey}/stats/${year}`, headers);
+            console.log('FRC Stats Data:', statsData);
+        } catch (statsError) {
+            console.warn('FRC Stats not available for this team/year:', statsError.message);
         }
-    };
+        
+        return {
+            number: teamNumber,
+            name: teamData.nickname || teamData.name,
+            city: teamData.city,
+            state: teamData.state_prov,
+            country: teamData.country,
+            rookieYear: teamData.rookie_year,
+            stats: {
+                ...statsData,
+                events: eventsData
+            }
+        };
+    } catch (error) {
+        console.error('Error fetching FRC team data:', error);
+        throw error;
+    }
 }
 
 async function fetchTeamMatches(teamNumber, year) {
@@ -458,90 +493,87 @@ async function fetchFRCMatches(teamNumber, year) {
     };
     
     const teamKey = `frc${teamNumber}`;
-    const eventsUrl = `${API_BASE_URL}/team/${teamKey}/events/${year}`;
-    console.log('Fetching FRC events from:', eventsUrl);
-    const eventsResponse = await fetch(eventsUrl, { headers });
-    if (!eventsResponse.ok) throw new Error('Events data not found');
-    const eventsData = await eventsResponse.json();
-    console.log('FRC Events data:', eventsData);
-
-    const eventMatches = {};
     
-    for (const event of eventsData) {
-        try {
-            const eventKey = event.key;
-            
-            const eventMatchesUrl = `${API_BASE_URL}/event/${eventKey}/matches`;
-            console.log(`Fetching all FRC matches for event ${eventKey} from:`, eventMatchesUrl);
-            const eventMatchesResponse = await fetch(eventMatchesUrl, { headers });
-            if (!eventMatchesResponse.ok) continue;
-            const allEventMatches = await eventMatchesResponse.json();
-            console.log(`All FRC matches for event ${eventKey}:`, allEventMatches);
+    try {
+        const eventsData = await makeFRCRequest(`${API_BASE_URL}/team/${teamKey}/events/${year}`, headers);
+        console.log('FRC Events data:', eventsData);
 
-            const teamMatches = allEventMatches.filter(match => {
-                return match.alliances.red.team_keys.includes(teamKey) || 
-                       match.alliances.blue.team_keys.includes(teamKey);
-            });
+        const eventMatches = {};
+        
+        for (const event of eventsData) {
+            try {
+                const eventKey = event.key;
+                
+                const allEventMatches = await makeFRCRequest(`${API_BASE_URL}/event/${eventKey}/matches`, headers);
+                console.log(`All FRC matches for event ${eventKey}:`, allEventMatches);
 
-            if (teamMatches.length > 0) {
-                eventMatches[eventKey] = {
-                    details: {
-                        name: event.name,
-                        startDate: event.start_date,
-                        endDate: event.end_date,
-                        location: `${event.city}, ${event.state_prov}`,
-                        stats: {
-                            wins: 0,
-                            losses: 0,
-                            ties: 0,
-                            rp: 0,
-                            rank: 0,
-                            tb1: 0,
-                            tb2: 0
-                        }
-                    },
-                    matches: teamMatches.map(match => {
-                        const isRed = match.alliances.red.team_keys.includes(teamKey);
-                        const alliance = isRed ? 'Red' : 'Blue';
-                        const allianceData = match.alliances[alliance.toLowerCase()];
-                        
-                        return {
-                            matchNumber: match.match_number,
-                            matchType: match.comp_level,
-                            alliance: alliance,
-                            station: isRed ? 
-                                   match.alliances.red.team_keys.indexOf(teamKey) + 1 :
-                                   match.alliances.blue.team_keys.indexOf(teamKey) + 1,
-                            redScore: match.alliances.red.score,
-                            blueScore: match.alliances.blue.score,
-                            surrogate: false,
-                            noShow: false,
-                            dq: false,
-                            teams: {
-                                red: match.alliances.red.team_keys.map(key => ({ teamNumber: key.replace('frc', '') })),
-                                blue: match.alliances.blue.team_keys.map(key => ({ teamNumber: key.replace('frc', '') }))
+                const teamMatches = allEventMatches.filter(match => {
+                    return match.alliances.red.team_keys.includes(teamKey) || 
+                           match.alliances.blue.team_keys.includes(teamKey);
+                });
+
+                if (teamMatches.length > 0) {
+                    eventMatches[eventKey] = {
+                        details: {
+                            name: event.name,
+                            startDate: event.start_date,
+                            endDate: event.end_date,
+                            location: `${event.city}, ${event.state_prov}`,
+                            stats: {
+                                wins: 0,
+                                losses: 0,
+                                ties: 0,
+                                rp: 0,
+                                rank: 0,
+                                tb1: 0,
+                                tb2: 0
                             }
-                        };
-                    })
-                };
+                        },
+                        matches: teamMatches.map(match => {
+                            const isRed = match.alliances.red.team_keys.includes(teamKey);
+                            const alliance = isRed ? 'Red' : 'Blue';
+                            
+                            return {
+                                matchNumber: match.match_number,
+                                matchType: match.comp_level,
+                                alliance: alliance,
+                                station: isRed ? 
+                                       match.alliances.red.team_keys.indexOf(teamKey) + 1 :
+                                       match.alliances.blue.team_keys.indexOf(teamKey) + 1,
+                                redScore: match.alliances.red.score,
+                                blueScore: match.alliances.blue.score,
+                                surrogate: false,
+                                noShow: false,
+                                dq: false,
+                                teams: {
+                                    red: match.alliances.red.team_keys.map(key => ({ teamNumber: key.replace('frc', '') })),
+                                    blue: match.alliances.blue.team_keys.map(key => ({ teamNumber: key.replace('frc', '') }))
+                                }
+                            };
+                        })
+                    };
+                }
+            } catch (error) {
+                console.error(`Error fetching FRC matches for event ${event.key}:`, error);
             }
-        } catch (error) {
-            console.error(`Error fetching FRC matches for event ${event.key}:`, error);
         }
-    }
 
-    for (const eventKey in eventMatches) {
-        eventMatches[eventKey].matches.sort((a, b) => {
-            const typeOrder = { 'qm': 0, 'qf': 1, 'sf': 2, 'f': 3 };
-            if (a.matchType !== b.matchType) {
-                return typeOrder[a.matchType] - typeOrder[b.matchType];
-            }
-            return a.matchNumber - b.matchNumber;
-        });
-    }
+        for (const eventKey in eventMatches) {
+            eventMatches[eventKey].matches.sort((a, b) => {
+                const typeOrder = { 'qm': 0, 'qf': 1, 'sf': 2, 'f': 3 };
+                if (a.matchType !== b.matchType) {
+                    return typeOrder[a.matchType] - typeOrder[b.matchType];
+                }
+                return a.matchNumber - b.matchNumber;
+            });
+        }
 
-    console.log('Final processed FRC event matches:', eventMatches);
-    return eventMatches;
+        console.log('Final processed FRC event matches:', eventMatches);
+        return eventMatches;
+    } catch (error) {
+        console.error('Error fetching FRC matches:', error);
+        throw error;
+    }
 }
 
 function determineResult(match) {
@@ -1370,3 +1402,20 @@ function clearData() {
 
 window.togglePresentationMode = togglePresentationMode;
 window.switchMode = switchMode;
+
+async function makeFRCRequest(url, headers = {}) {
+    const proxyUrl = CORS_PROXY + url;
+    const response = await fetch(proxyUrl, {
+        method: 'GET',
+        headers: {
+            'Origin': window.location.origin,
+            ...headers
+        }
+    });
+    
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    return response.json();
+}

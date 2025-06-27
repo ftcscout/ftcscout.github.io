@@ -28,6 +28,15 @@ To use FRC functionality, you need to obtain an API key from The Blue Alliance:
 const FRC_API_KEY = 'your_actual_api_key_here';
 ```
 
+### CORS Proxy Solution
+
+Due to CORS restrictions, FRC API calls use a CORS proxy service (`cors-anywhere.herokuapp.com`). This allows the application to access The Blue Alliance API from a web browser.
+
+**Note**: The CORS proxy service may have rate limits or temporary outages. If FRC data is not loading:
+1. Try refreshing the page
+2. Switch to FTC mode temporarily
+3. Check the browser console for error messages
+
 ### API Documentation
 
 - **FTC API**: [FTC Scout API](https://api.ftcscout.org/rest/v1)
@@ -54,10 +63,24 @@ const FRC_API_KEY = 'your_actual_api_key_here';
 - Supports seasons from 1992 to present
 - Shows total scoring (auto/teleop combined)
 - Displays FRC-specific statistics (OPR, DPR, CCWM)
+- Uses CORS proxy for browser compatibility
 
 ### Data Sources
 - **FTC**: FTC Scout API (no authentication required)
-- **FRC**: The Blue Alliance API v3 (requires API key)
+- **FRC**: The Blue Alliance API v3 (requires API key, uses CORS proxy)
+
+## Troubleshooting
+
+### FRC Data Not Loading
+- Check that your API key is correctly set in `script.js`
+- Verify the API key is valid by testing it directly with The Blue Alliance API
+- Check browser console for CORS or network errors
+- Try refreshing the page or switching modes
+
+### CORS Errors
+- The application uses a CORS proxy to access FRC data
+- If the proxy is down, FRC mode will show an error message
+- FTC mode will continue to work normally
 
 ## Browser Compatibility
 
@@ -72,6 +95,7 @@ The application is built with vanilla JavaScript and uses:
 - CSS Grid and Flexbox for layout
 - Fetch API for data retrieval
 - Local caching for improved performance
+- CORS proxy for FRC API access
 
 ## License
 
