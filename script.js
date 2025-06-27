@@ -1,4 +1,32 @@
-const API_BASE_URL = 'https://api.ftcscout.org/rest/v1';
+const MODES = {
+    ftc: {
+        name: 'FTC',
+        apiBase: 'https://api.ftcscout.org/rest/v1',
+        title: 'MechaSearch (21781)',
+        subtitle: 'Explore team statistics, match history, and performance analytics for FIRST Tech Challenge teams.',
+        defaultTeam: '21781',
+        seasons: {
+            current: 2024,
+            start: 2015
+        }
+    },
+    frc: {
+        name: 'FRC',
+        apiBase: 'https://www.thebluealliance.com/api/v3',
+        title: 'MechaSearch (FRC)',
+        subtitle: 'Explore team statistics, match history, and performance analytics for FIRST Robotics Competition teams.',
+        defaultTeam: '21781',
+        seasons: {
+            current: 2024,
+            start: 1992
+        }
+    }
+};
+
+let currentMode = 'ftc';
+let API_BASE_URL = MODES[currentMode].apiBase;
+
+const FRC_API_KEY = 'pUm7ONNd4VrNmelSO4ZX8Muf24gGn7xMI1VE8jeohY8ODZfEDZOlPuoahrHr9m57';
 
 const DOM = {
     mainContent: document.querySelector('.main-content'),
@@ -9,6 +37,8 @@ const DOM = {
     analyticsContainer: document.getElementById('analytics-container'),
     teamBasicInfo: document.getElementById('teamBasicInfo'),
     teamStats: document.getElementById('teamStats'),
+    landingTitle: document.getElementById('landingTitle'),
+    landingSubtitle: document.getElementById('landingSubtitle'),
     charts: {
         scoreProgression: document.getElementById('scoreProgressionChart'),
         phaseBreakdown: document.getElementById('phaseBreakdownChart'),
@@ -125,10 +155,11 @@ function createSeasonSelector(rookieYear) {
     const seasonSelector = document.getElementById('seasonSelector');
     if (!seasonSelector) return;
 
-    const currentYear = 2024;
+    const currentYear = MODES[currentMode].seasons.current;
+    const startYear = Math.max(rookieYear || MODES[currentMode].seasons.start, MODES[currentMode].seasons.start);
     seasonSelector.innerHTML = '';
     
-    for (let year = currentYear; year >= rookieYear; year--) {
+    for (let year = currentYear; year >= startYear; year--) {
         const option = document.createElement('option');
         option.value = year;
         option.textContent = year;
@@ -182,10 +213,21 @@ function displayMatchData(matchData) {
         matchesContainer.style.display = 'block';
         
         matchesContainer.innerHTML = eventData.matches.map(match => {
-            const redScore = match.redScore?.totalPointsNp || match.redScore?.totalPoints || 0;
-            const blueScore = match.blueScore?.totalPointsNp || match.blueScore?.totalPoints || 0;
-            const autoPoints = match[`${match.alliance.toLowerCase()}Score`]?.autoPoints || 0;
-            const dcPoints = match[`${match.alliance.toLowerCase()}Score`]?.dcPoints || 0;
+            let redScore, blueScore, autoPoints, dcPoints;
+            
+            if (currentMode === 'ftc') {
+                redScore = match.redScore?.totalPointsNp || match.redScore?.totalPoints || 0;
+                blueScore = match.blueScore?.totalPointsNp || match.blueScore?.totalPoints || 0;
+                autoPoints = match[`${match.alliance.toLowerCase()}Score`]?.autoPoints || 0;
+                dcPoints = match[`${match.alliance.toLowerCase()}Score`]?.dcPoints || 0;
+            } else {
+                redScore = match.redScore || 0;
+                blueScore = match.blueScore || 0;
+                autoPoints = 0;
+                dcPoints = 0;
+            }
+            
+            const matchTypeDisplay = getMatchTypeDisplay(match.matchType);
             
             return `
                 <div class="match-card ${match.alliance.toLowerCase()}-alliance">
@@ -197,8 +239,8 @@ function displayMatchData(matchData) {
                             <span class="blue">${blueScore}</span>
                         </div>
                         <div class="points">
-                            <span>A:${autoPoints}</span>
-                            <span>T:${dcPoints}</span>
+                            <span>${matchTypeDisplay}</span>
+                            ${currentMode === 'ftc' ? `<span>A:${autoPoints}</span><span>T:${dcPoints}</span>` : ''}
                         </div>
                     </div>
                 </div>
@@ -215,137 +257,291 @@ function displayMatchData(matchData) {
     createAnalytics(matchData);
 }
 
+function getMatchTypeDisplay(matchType) {
+    if (currentMode === 'ftc') {
+        return matchType === 'QUALIFICATION' ? 'Q' : matchType === 'SEMIFINAL' ? 'SF' : matchType === 'FINAL' ? 'F' : matchType;
+    } else {
+        const frcTypes = {
+            'qm': 'Q',
+            'qf': 'QF',
+            'sf': 'SF',
+            'f': 'F'
+        };
+        return frcTypes[matchType] || matchType;
+    }
+}
+
 async function fetchTeamData(teamNumber, year) {
     try {
-        console.log('Fetching data for team:', teamNumber);
+        console.log(`Fetching ${currentMode.toUpperCase()} data for team:`, teamNumber);
         
-        const teamResponse = await fetch(`${API_BASE_URL}/teams/${teamNumber}`);
-        const teamData = await teamResponse.json();
-        console.log('Team Data:', teamData);
-
-        const eventsResponse = await fetch(`${API_BASE_URL}/teams/${teamNumber}/events/${year}`);
-        const eventsData = await eventsResponse.json();
-        console.log('Events Data:', eventsData);
-        
-        let eventStats = null;
-        if (eventsData && eventsData.length > 0) {
-            const sortedEvents = eventsData.sort((a, b) => 
-                new Date(b.startDate) - new Date(a.startDate)
-            );
-            eventStats = sortedEvents[0].stats;
-            console.log('Event Stats:', eventStats);
+        if (currentMode === 'ftc') {
+            return await fetchFTCTeamData(teamNumber, year);
+        } else {
+            return await fetchFRCTeamData(teamNumber, year);
         }
-        
-        const statsUrl = `${API_BASE_URL}/teams/${teamNumber}/quick-stats?season=${year}`;
-        console.log('Fetching quick stats from:', statsUrl);
-        const statsResponse = await fetch(statsUrl);
-        const quickStats = await statsResponse.json();
-        console.log('Quick Stats:', quickStats);
-
-        const stats = {
-            ...quickStats,
-            ...eventStats,
-            events: eventsData
-        };
-        console.log('Combined Stats:', stats);
-        
-        return {
-            ...teamData,
-            stats: stats
-        };
     } catch (error) {
         console.error('Error fetching team data:', error);
         throw error;
     }
 }
 
+async function fetchFTCTeamData(teamNumber, year) {
+    const teamResponse = await fetch(`${API_BASE_URL}/teams/${teamNumber}`);
+    const teamData = await teamResponse.json();
+    console.log('FTC Team Data:', teamData);
+
+    const eventsResponse = await fetch(`${API_BASE_URL}/teams/${teamNumber}/events/${year}`);
+    const eventsData = await eventsResponse.json();
+    console.log('FTC Events Data:', eventsData);
+    
+    let eventStats = null;
+    if (eventsData && eventsData.length > 0) {
+        const sortedEvents = eventsData.sort((a, b) => 
+            new Date(b.startDate) - new Date(a.startDate)
+        );
+        eventStats = sortedEvents[0].stats;
+        console.log('FTC Event Stats:', eventStats);
+    }
+    
+    const statsUrl = `${API_BASE_URL}/teams/${teamNumber}/quick-stats?season=${year}`;
+    console.log('Fetching FTC quick stats from:', statsUrl);
+    const statsResponse = await fetch(statsUrl);
+    const quickStats = await statsResponse.json();
+    console.log('FTC Quick Stats:', quickStats);
+
+    const stats = {
+        ...quickStats,
+        ...eventStats,
+        events: eventsData
+    };
+    console.log('FTC Combined Stats:', stats);
+    
+    return {
+        ...teamData,
+        stats: stats
+    };
+}
+
+async function fetchFRCTeamData(teamNumber, year) {
+    const headers = {
+        'X-TBA-Auth-Key': FRC_API_KEY
+    };
+    
+    const teamKey = `frc${teamNumber}`;
+    const teamResponse = await fetch(`${API_BASE_URL}/team/${teamKey}`, { headers });
+    const teamData = await teamResponse.json();
+    console.log('FRC Team Data:', teamData);
+
+    const eventsResponse = await fetch(`${API_BASE_URL}/team/${teamKey}/events/${year}`, { headers });
+    const eventsData = await eventsResponse.json();
+    console.log('FRC Events Data:', eventsData);
+    
+    const statsResponse = await fetch(`${API_BASE_URL}/team/${teamKey}/stats/${year}`, { headers });
+    const statsData = await statsResponse.json();
+    console.log('FRC Stats Data:', statsData);
+    
+    return {
+        number: teamNumber,
+        name: teamData.nickname || teamData.name,
+        city: teamData.city,
+        state: teamData.state_prov,
+        country: teamData.country,
+        rookieYear: teamData.rookie_year,
+        stats: {
+            ...statsData,
+            events: eventsData
+        }
+    };
+}
+
 async function fetchTeamMatches(teamNumber, year) {
     try {
-        const eventsUrl = `${API_BASE_URL}/teams/${teamNumber}/events/${year}`;
-        console.log('Fetching events from:', eventsUrl);
-        const eventsResponse = await fetch(eventsUrl);
-        if (!eventsResponse.ok) throw new Error('Events data not found');
-        const eventsData = await eventsResponse.json();
-        console.log('Events data:', eventsData);
-
-        const eventMatches = {};
-        
-        for (const event of eventsData) {
-            try {
-                const eventCode = event.eventCode;
-                
-                const eventMatchesUrl = `${API_BASE_URL}/events/${year}/${eventCode}/matches`;
-                console.log(`Fetching all matches for event ${eventCode} from:`, eventMatchesUrl);
-                const eventMatchesResponse = await fetch(eventMatchesUrl);
-                if (!eventMatchesResponse.ok) continue;
-                const allEventMatches = await eventMatchesResponse.json();
-                console.log(`All matches for event ${eventCode}:`, allEventMatches);
-
-                const teamMatches = allEventMatches.filter(match => {
-                    return match.teams.some(team => team.teamNumber === parseInt(teamNumber));
-                });
-
-                if (teamMatches.length > 0) {
-                    eventMatches[eventCode] = {
-                        details: {
-                            name: event.name,
-                            startDate: event.startDate,
-                            endDate: event.endDate,
-                            location: event.location,
-                            stats: event.stats || {
-                                wins: 0,
-                                losses: 0,
-                                ties: 0,
-                                rp: 0,
-                                rank: 0,
-                                tb1: 0,
-                                tb2: 0
-                            }
-                        },
-                        matches: teamMatches.map(match => {
-                            const ourTeamInfo = match.teams.find(team => 
-                                team.teamNumber === parseInt(teamNumber)
-                            );
-                            
-                            return {
-                                matchNumber: match.id,
-                                matchType: match.tournamentLevel,
-                                alliance: ourTeamInfo.alliance,
-                                station: ourTeamInfo.station,
-                                redScore: match.scores.red,
-                                blueScore: match.scores.blue,
-                                surrogate: ourTeamInfo.surrogate,
-                                noShow: ourTeamInfo.noShow,
-                                dq: ourTeamInfo.dq,
-                                teams: {
-                                    red: match.teams.filter(t => t.alliance === 'Red'),
-                                    blue: match.teams.filter(t => t.alliance === 'Blue')
-                                }
-                            };
-                        })
-                    };
-                }
-            } catch (error) {
-                console.error(`Error fetching matches for event ${event.eventCode}:`, error);
-            }
+        if (currentMode === 'ftc') {
+            return await fetchFTCMatches(teamNumber, year);
+        } else {
+            return await fetchFRCMatches(teamNumber, year);
         }
-
-        for (const eventCode in eventMatches) {
-            eventMatches[eventCode].matches.sort((a, b) => {
-                const typeOrder = { 'Quals': 0, 'Semis': 1, 'Finals': 2 };
-                if (a.matchType !== b.matchType) {
-                    return typeOrder[a.matchType] - typeOrder[b.matchType];
-                }
-                return a.matchNumber - b.matchNumber;
-            });
-        }
-
-        console.log('Final processed event matches:', eventMatches);
-        return eventMatches;
     } catch (error) {
         console.error('Error fetching match data:', error);
         return {};
     }
+}
+
+async function fetchFTCMatches(teamNumber, year) {
+    const eventsUrl = `${API_BASE_URL}/teams/${teamNumber}/events/${year}`;
+    console.log('Fetching FTC events from:', eventsUrl);
+    const eventsResponse = await fetch(eventsUrl);
+    if (!eventsResponse.ok) throw new Error('Events data not found');
+    const eventsData = await eventsResponse.json();
+    console.log('FTC Events data:', eventsData);
+
+    const eventMatches = {};
+    
+    for (const event of eventsData) {
+        try {
+            const eventCode = event.eventCode;
+            
+            const eventMatchesUrl = `${API_BASE_URL}/events/${year}/${eventCode}/matches`;
+            console.log(`Fetching all FTC matches for event ${eventCode} from:`, eventMatchesUrl);
+            const eventMatchesResponse = await fetch(eventMatchesUrl);
+            if (!eventMatchesResponse.ok) continue;
+            const allEventMatches = await eventMatchesResponse.json();
+            console.log(`All FTC matches for event ${eventCode}:`, allEventMatches);
+
+            const teamMatches = allEventMatches.filter(match => {
+                return match.teams.some(team => team.teamNumber === parseInt(teamNumber));
+            });
+
+            if (teamMatches.length > 0) {
+                eventMatches[eventCode] = {
+                    details: {
+                        name: event.name,
+                        startDate: event.startDate,
+                        endDate: event.endDate,
+                        location: event.location,
+                        stats: event.stats || {
+                            wins: 0,
+                            losses: 0,
+                            ties: 0,
+                            rp: 0,
+                            rank: 0,
+                            tb1: 0,
+                            tb2: 0
+                        }
+                    },
+                    matches: teamMatches.map(match => {
+                        const ourTeamInfo = match.teams.find(team => 
+                            team.teamNumber === parseInt(teamNumber)
+                        );
+                        
+                        return {
+                            matchNumber: match.id,
+                            matchType: match.tournamentLevel,
+                            alliance: ourTeamInfo.alliance,
+                            station: ourTeamInfo.station,
+                            redScore: match.scores.red,
+                            blueScore: match.scores.blue,
+                            surrogate: ourTeamInfo.surrogate,
+                            noShow: ourTeamInfo.noShow,
+                            dq: ourTeamInfo.dq,
+                            teams: {
+                                red: match.teams.filter(t => t.alliance === 'Red'),
+                                blue: match.teams.filter(t => t.alliance === 'Blue')
+                            }
+                        };
+                    })
+                };
+            }
+        } catch (error) {
+            console.error(`Error fetching FTC matches for event ${event.eventCode}:`, error);
+        }
+    }
+
+    for (const eventCode in eventMatches) {
+        eventMatches[eventCode].matches.sort((a, b) => {
+            const typeOrder = { 'Quals': 0, 'Semis': 1, 'Finals': 2 };
+            if (a.matchType !== b.matchType) {
+                return typeOrder[a.matchType] - typeOrder[b.matchType];
+            }
+            return a.matchNumber - b.matchNumber;
+        });
+    }
+
+    console.log('Final processed FTC event matches:', eventMatches);
+    return eventMatches;
+}
+
+async function fetchFRCMatches(teamNumber, year) {
+    const headers = {
+        'X-TBA-Auth-Key': FRC_API_KEY
+    };
+    
+    const teamKey = `frc${teamNumber}`;
+    const eventsUrl = `${API_BASE_URL}/team/${teamKey}/events/${year}`;
+    console.log('Fetching FRC events from:', eventsUrl);
+    const eventsResponse = await fetch(eventsUrl, { headers });
+    if (!eventsResponse.ok) throw new Error('Events data not found');
+    const eventsData = await eventsResponse.json();
+    console.log('FRC Events data:', eventsData);
+
+    const eventMatches = {};
+    
+    for (const event of eventsData) {
+        try {
+            const eventKey = event.key;
+            
+            const eventMatchesUrl = `${API_BASE_URL}/event/${eventKey}/matches`;
+            console.log(`Fetching all FRC matches for event ${eventKey} from:`, eventMatchesUrl);
+            const eventMatchesResponse = await fetch(eventMatchesUrl, { headers });
+            if (!eventMatchesResponse.ok) continue;
+            const allEventMatches = await eventMatchesResponse.json();
+            console.log(`All FRC matches for event ${eventKey}:`, allEventMatches);
+
+            const teamMatches = allEventMatches.filter(match => {
+                return match.alliances.red.team_keys.includes(teamKey) || 
+                       match.alliances.blue.team_keys.includes(teamKey);
+            });
+
+            if (teamMatches.length > 0) {
+                eventMatches[eventKey] = {
+                    details: {
+                        name: event.name,
+                        startDate: event.start_date,
+                        endDate: event.end_date,
+                        location: `${event.city}, ${event.state_prov}`,
+                        stats: {
+                            wins: 0,
+                            losses: 0,
+                            ties: 0,
+                            rp: 0,
+                            rank: 0,
+                            tb1: 0,
+                            tb2: 0
+                        }
+                    },
+                    matches: teamMatches.map(match => {
+                        const isRed = match.alliances.red.team_keys.includes(teamKey);
+                        const alliance = isRed ? 'Red' : 'Blue';
+                        const allianceData = match.alliances[alliance.toLowerCase()];
+                        
+                        return {
+                            matchNumber: match.match_number,
+                            matchType: match.comp_level,
+                            alliance: alliance,
+                            station: isRed ? 
+                                   match.alliances.red.team_keys.indexOf(teamKey) + 1 :
+                                   match.alliances.blue.team_keys.indexOf(teamKey) + 1,
+                            redScore: match.alliances.red.score,
+                            blueScore: match.alliances.blue.score,
+                            surrogate: false,
+                            noShow: false,
+                            dq: false,
+                            teams: {
+                                red: match.alliances.red.team_keys.map(key => ({ teamNumber: key.replace('frc', '') })),
+                                blue: match.alliances.blue.team_keys.map(key => ({ teamNumber: key.replace('frc', '') }))
+                            }
+                        };
+                    })
+                };
+            }
+        } catch (error) {
+            console.error(`Error fetching FRC matches for event ${event.key}:`, error);
+        }
+    }
+
+    for (const eventKey in eventMatches) {
+        eventMatches[eventKey].matches.sort((a, b) => {
+            const typeOrder = { 'qm': 0, 'qf': 1, 'sf': 2, 'f': 3 };
+            if (a.matchType !== b.matchType) {
+                return typeOrder[a.matchType] - typeOrder[b.matchType];
+            }
+            return a.matchNumber - b.matchNumber;
+        });
+    }
+
+    console.log('Final processed FRC event matches:', eventMatches);
+    return eventMatches;
 }
 
 function determineResult(match) {
@@ -373,8 +569,15 @@ function displayTeamInfo(teamData, matchData) {
         Object.values(matchData).forEach(eventData => {
             if (eventData.matches) {
                 eventData.matches.forEach(match => {
-                    const redScore = match.redScore?.totalPointsNp || match.redScore?.totalPoints || 0;
-                    const blueScore = match.blueScore?.totalPointsNp || match.blueScore?.totalPoints || 0;
+                    let redScore, blueScore;
+                    
+                    if (currentMode === 'ftc') {
+                        redScore = match.redScore?.totalPointsNp || match.redScore?.totalPoints || 0;
+                        blueScore = match.blueScore?.totalPointsNp || match.blueScore?.totalPoints || 0;
+                    } else {
+                        redScore = match.redScore || 0;
+                        blueScore = match.blueScore || 0;
+                    }
                     
                     if (match.alliance?.toLowerCase() === 'red') {
                         if (redScore > blueScore) record.wins++;
@@ -419,68 +622,120 @@ function displayTeamInfo(teamData, matchData) {
 
         const stats = teamData.stats;
         
-        statsDiv.innerHTML = `
-            <h3>Team Statistics (2024 Season)</h3>
-            
-            <div class="stats-grid">
-                <div class="stats-section">
-                    <h4>Season Rankings</h4>
-                    <table class="stats-table">
-                        <tr>
-                            <th>Category</th>
-                            <th>Value</th>
-                            <th>Rank</th>
-                        </tr>
-                        <tr>
-                            <td>Auto</td>
-                            <td>${formatValue(stats.auto?.value)}</td>
-                            <td>${stats.auto?.rank || 'N/A'} of ${stats.count || 'N/A'}</td>
-                        </tr>
-                        <tr>
-                            <td>Driver Control</td>
-                            <td>${formatValue(stats.dc?.value)}</td>
-                            <td>${stats.dc?.rank || 'N/A'} of ${stats.count || 'N/A'}</td>
-                        </tr>
-                        <tr>
-                            <td>Endgame</td>
-                            <td>${formatValue(stats.eg?.value)}</td>
-                            <td>${stats.eg?.rank || 'N/A'} of ${stats.count || 'N/A'}</td>
-                        </tr>
-                    </table>
-                </div>
+        if (currentMode === 'ftc') {
+            statsDiv.innerHTML = `
+                <h3>Team Statistics (${MODES[currentMode].seasons.current} Season)</h3>
+                
+                <div class="stats-grid">
+                    <div class="stats-section">
+                        <h4>Season Rankings</h4>
+                        <table class="stats-table">
+                            <tr>
+                                <th>Category</th>
+                                <th>Value</th>
+                                <th>Rank</th>
+                            </tr>
+                            <tr>
+                                <td>Auto</td>
+                                <td>${formatValue(stats.auto?.value)}</td>
+                                <td>${stats.auto?.rank || 'N/A'} of ${stats.count || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td>Driver Control</td>
+                                <td>${formatValue(stats.dc?.value)}</td>
+                                <td>${stats.dc?.rank || 'N/A'} of ${stats.count || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td>Endgame</td>
+                                <td>${formatValue(stats.eg?.value)}</td>
+                                <td>${stats.eg?.rank || 'N/A'} of ${stats.count || 'N/A'}</td>
+                            </tr>
+                        </table>
+                    </div>
 
-                <div class="stats-section">
-                    <h4>Average Match Breakdown</h4>
-                    <table class="stats-table">
-                        <tr>
-                            <th>Phase</th>
-                            <th>Avg</th>
-                            <th>Max</th>
-                        </tr>
-                        <tr>
-                            <td>Auto</td>
-                            <td>${formatValue(stats.avg?.autoPoints)}</td>
-                            <td>${stats.max?.autoPoints || '0'}</td>
-                        </tr>
-                        <tr>
-                            <td>Driver Control</td>
-                            <td>${formatValue(stats.avg?.dcPoints)}</td>
-                            <td>${stats.max?.dcPoints || '0'}</td>
-                        </tr>
-                        <tr>
-                            <td>Total (No Penalties)</td>
-                            <td>${formatValue(stats.avg?.totalPointsNp)}</td>
-                            <td>${stats.max?.totalPointsNp || '0'}</td>
-                        </tr>
-                        <tr>
-                            <td>Total (With Penalties)</td>
-                            <td>${formatValue(stats.avg?.totalPoints)}</td>
-                            <td>${stats.max?.totalPoints || '0'}</td>
-                        </tr>
-                    </table>
+                    <div class="stats-section">
+                        <h4>Average Match Breakdown</h4>
+                        <table class="stats-table">
+                            <tr>
+                                <th>Phase</th>
+                                <th>Avg</th>
+                                <th>Max</th>
+                            </tr>
+                            <tr>
+                                <td>Auto</td>
+                                <td>${formatValue(stats.avg?.autoPoints)}</td>
+                                <td>${stats.max?.autoPoints || '0'}</td>
+                            </tr>
+                            <tr>
+                                <td>Driver Control</td>
+                                <td>${formatValue(stats.avg?.dcPoints)}</td>
+                                <td>${stats.max?.dcPoints || '0'}</td>
+                            </tr>
+                            <tr>
+                                <td>Total (No Penalties)</td>
+                                <td>${formatValue(stats.avg?.totalPointsNp)}</td>
+                                <td>${stats.max?.totalPointsNp || '0'}</td>
+                            </tr>
+                            <tr>
+                                <td>Total (With Penalties)</td>
+                                <td>${formatValue(stats.avg?.totalPoints)}</td>
+                                <td>${stats.max?.totalPoints || '0'}</td>
+                            </tr>
+                        </table>
+                    </div>
                 </div>
-            </div>
-        `;
+            `;
+        } else {
+            statsDiv.innerHTML = `
+                <h3>Team Statistics (${MODES[currentMode].seasons.current} Season)</h3>
+                
+                <div class="stats-grid">
+                    <div class="stats-section">
+                        <h4>Season Performance</h4>
+                        <table class="stats-table">
+                            <tr>
+                                <th>Category</th>
+                                <th>Value</th>
+                            </tr>
+                            <tr>
+                                <td>OPR (Offensive Power Rating)</td>
+                                <td>${formatValue(stats.opr || 0)}</td>
+                            </tr>
+                            <tr>
+                                <td>DPR (Defensive Power Rating)</td>
+                                <td>${formatValue(stats.dpr || 0)}</td>
+                            </tr>
+                            <tr>
+                                <td>CCWM (Calculated Contribution to Winning Margin)</td>
+                                <td>${formatValue(stats.ccwm || 0)}</td>
+                            </tr>
+                        </table>
+                    </div>
+
+                    <div class="stats-section">
+                        <h4>Match Statistics</h4>
+                        <table class="stats-table">
+                            <tr>
+                                <th>Category</th>
+                                <th>Value</th>
+                            </tr>
+                            <tr>
+                                <td>Average Score</td>
+                                <td>${formatValue(stats.avg_score || 0)}</td>
+                            </tr>
+                            <tr>
+                                <td>Max Score</td>
+                                <td>${stats.max_score || '0'}</td>
+                            </tr>
+                            <tr>
+                                <td>Total Matches</td>
+                                <td>${stats.total_matches || '0'}</td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
     } else {
         statsDiv.innerHTML = `
             <h3>Team Statistics</h3>
@@ -582,53 +837,72 @@ function createMatchHistoryChart(matches) {
     const ctx = document.getElementById('scoreProgressionChart').getContext('2d');
     
     const matchData = matches.map((match, index) => {
-        const alliance = match.alliance.toLowerCase();
-        const score = match[`${alliance}Score`];
+        let auto, teleop, total;
+        
+        if (currentMode === 'ftc') {
+            const alliance = match.alliance.toLowerCase();
+            const score = match[`${alliance}Score`];
+            auto = score?.autoPoints || 0;
+            teleop = score?.dcPoints || 0;
+            total = score?.totalPointsNp || 0;
+        } else {
+            const alliance = match.alliance.toLowerCase();
+            total = match[`${alliance}Score`] || 0;
+            auto = 0;
+            teleop = total;
+        }
+        
         return {
-            auto: score?.autoPoints || 0,
-            teleop: score?.dcPoints || 0,
-            total: score?.totalPointsNp || 0,
+            auto: auto,
+            teleop: teleop,
+            total: total,
             matchNumber: index + 1
         };
+    });
+
+    const datasets = [
+        {
+            label: currentMode === 'ftc' ? 'Auto' : 'Score',
+            data: matchData.map(m => m.auto),
+            backgroundColor: 'rgba(255, 206, 86, 0.8)',
+            stack: 'Stack 0',
+        }
+    ];
+    
+    if (currentMode === 'ftc') {
+        datasets.push({
+            label: 'TeleOp',
+            data: matchData.map(m => m.teleop),
+            backgroundColor: 'rgba(75, 192, 192, 0.8)',
+            stack: 'Stack 0',
+        });
+    }
+    
+    datasets.push({
+        label: 'Match Average',
+        data: matchData.map(() => {
+            const avg = matchData.reduce((sum, m) => sum + m.total, 0) / matchData.length;
+            return avg;
+        }),
+        type: 'line',
+        borderColor: 'rgba(255, 99, 132, 1)',
+        borderWidth: 2,
+        fill: false,
+        pointRadius: 0,
     });
 
     return new Chart(ctx, {
         type: 'bar',
         data: {
             labels: matchData.map(m => `Match ${m.matchNumber}`),
-            datasets: [
-                {
-                    label: 'Auto',
-                    data: matchData.map(m => m.auto),
-                    backgroundColor: 'rgba(255, 206, 86, 0.8)',
-                    stack: 'Stack 0',
-                },
-                {
-                    label: 'TeleOp',
-                    data: matchData.map(m => m.teleop),
-                    backgroundColor: 'rgba(75, 192, 192, 0.8)',
-                    stack: 'Stack 0',
-                },
-                {
-                    label: 'Match Average',
-                    data: matchData.map(() => {
-                        const avg = matchData.reduce((sum, m) => sum + m.total, 0) / matchData.length;
-                        return avg;
-                    }),
-                    type: 'line',
-                    borderColor: 'rgba(255, 99, 132, 1)',
-                    borderWidth: 2,
-                    fill: false,
-                    pointRadius: 0,
-                }
-            ]
+            datasets: datasets
         },
         options: {
             ...chartConfig,
             plugins: {
                 title: {
                     display: true,
-                    text: 'Match History Breakdown',
+                    text: `${currentMode.toUpperCase()} Match History Breakdown`,
                     color: '#ffffff',
                     font: { size: 16 }
                 },
@@ -649,63 +923,115 @@ function createMatchHistoryChart(matches) {
 function createScoringBreakdownChart(matches) {
     const ctx = document.getElementById('phaseBreakdownChart').getContext('2d');
     
-    const scoringData = matches.reduce((acc, match) => {
-        const alliance = match.alliance.toLowerCase();
-        const score = match[`${alliance}Score`];
-        if (score) {
-            acc.auto += score.autoPoints || 0;
-            acc.teleop += score.dcPoints || 0;
-        }
-        return acc;
-    }, { auto: 0, teleop: 0 });
+    let scoringData;
+    
+    if (currentMode === 'ftc') {
+        scoringData = matches.reduce((acc, match) => {
+            const alliance = match.alliance.toLowerCase();
+            const score = match[`${alliance}Score`];
+            if (score) {
+                acc.auto += score.autoPoints || 0;
+                acc.teleop += score.dcPoints || 0;
+            }
+            return acc;
+        }, { auto: 0, teleop: 0 });
+    } else {
+        scoringData = matches.reduce((acc, match) => {
+            const alliance = match.alliance.toLowerCase();
+            const score = match[`${alliance}Score`] || 0;
+            acc.total += score;
+            return acc;
+        }, { total: 0 });
+    }
 
-    const total = scoringData.auto + scoringData.teleop;
-    const autoPercentage = (scoringData.auto / total * 100).toFixed(1);
-    const teleopPercentage = (scoringData.teleop / total * 100).toFixed(1);
+    if (currentMode === 'ftc') {
+        const total = scoringData.auto + scoringData.teleop;
+        const autoPercentage = (scoringData.auto / total * 100).toFixed(1);
+        const teleopPercentage = (scoringData.teleop / total * 100).toFixed(1);
 
-    return new Chart(ctx, {
-        type: 'pie',
-        data: {
-            labels: [`Auto (${autoPercentage}%)`, `TeleOp (${teleopPercentage}%)`],
-            datasets: [{
-                data: [scoringData.auto, scoringData.teleop],
-                backgroundColor: [
-                    'rgba(255, 206, 86, 0.8)',
-                    'rgba(75, 192, 192, 0.8)'
-                ],
-                borderColor: 'rgba(255, 255, 255, 0.1)',
-                borderWidth: 1
-            }]
-        },
-        options: {
-            ...chartConfig,
-            plugins: {
-                title: {
-                    display: true,
-                    text: 'Scoring Phase Distribution',
-                    color: '#ffffff',
-                    font: { size: 16 }
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            const label = context.label || '';
-                            const value = context.parsed || 0;
-                            return `${label}: ${Math.round(value)} points`;
+        return new Chart(ctx, {
+            type: 'pie',
+            data: {
+                labels: [`Auto (${autoPercentage}%)`, `TeleOp (${teleopPercentage}%)`],
+                datasets: [{
+                    data: [scoringData.auto, scoringData.teleop],
+                    backgroundColor: [
+                        'rgba(255, 206, 86, 0.8)',
+                        'rgba(75, 192, 192, 0.8)'
+                    ],
+                    borderColor: 'rgba(255, 255, 255, 0.1)',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                ...chartConfig,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'FTC Scoring Phase Distribution',
+                        color: '#ffffff',
+                        font: { size: 16 }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const label = context.label || '';
+                                const value = context.parsed || 0;
+                                return `${label}: ${Math.round(value)} points`;
+                            }
                         }
                     }
                 }
             }
-        }
-    });
+        });
+    } else {
+        return new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: [`Total Score (${scoringData.total} pts)`],
+                datasets: [{
+                    data: [scoringData.total],
+                    backgroundColor: ['rgba(75, 192, 192, 0.8)'],
+                    borderColor: 'rgba(255, 255, 255, 0.1)',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                ...chartConfig,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'FRC Total Score',
+                        color: '#ffffff',
+                        font: { size: 16 }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const value = context.parsed || 0;
+                                return `Total: ${Math.round(value)} points`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
 }
 
 function createWinLossChart(matches) {
     const ctx = document.getElementById('performanceRadarChart').getContext('2d');
     
     const results = matches.reduce((acc, match) => {
-        const redScore = match.redScore?.totalPointsNp || match.redScore?.totalPoints || 0;
-        const blueScore = match.blueScore?.totalPointsNp || match.blueScore?.totalPoints || 0;
+        let redScore, blueScore;
+        
+        if (currentMode === 'ftc') {
+            redScore = match.redScore?.totalPointsNp || match.redScore?.totalPoints || 0;
+            blueScore = match.blueScore?.totalPointsNp || match.blueScore?.totalPoints || 0;
+        } else {
+            redScore = match.redScore || 0;
+            blueScore = match.blueScore || 0;
+        }
         
         if (match.alliance.toLowerCase() === 'red') {
             if (redScore > blueScore) acc.won++;
@@ -749,7 +1075,7 @@ function createWinLossChart(matches) {
             plugins: {
                 title: {
                     display: true,
-                    text: `Win/Loss Record (${winRate}% Win Rate)`,
+                    text: `${currentMode.toUpperCase()} Win/Loss Record (${winRate}% Win Rate)`,
                     color: '#ffffff',
                     font: { size: 16 }
                 }
@@ -773,8 +1099,15 @@ function createPerformanceTrendsChart(matches) {
     };
 
     const scores = matches.map(match => {
-        const alliance = match.alliance.toLowerCase();
-        return match[`${alliance}Score`]?.totalPointsNp || 0;
+        let score;
+        if (currentMode === 'ftc') {
+            const alliance = match.alliance.toLowerCase();
+            score = match[`${alliance}Score`]?.totalPointsNp || 0;
+        } else {
+            const alliance = match.alliance.toLowerCase();
+            score = match[`${alliance}Score`] || 0;
+        }
+        return score;
     });
 
     const trendLine = movingAverage(scores, 3);
@@ -807,7 +1140,7 @@ function createPerformanceTrendsChart(matches) {
             plugins: {
                 title: {
                     display: true,
-                    text: 'Performance Trends',
+                    text: `${currentMode.toUpperCase()} Performance Trends`,
                     color: '#ffffff',
                     font: { size: 16 }
                 }
@@ -829,7 +1162,7 @@ const PRESENTATION = {
                 const searchArea = document.querySelector('.landing-search');
                 searchArea.classList.add('presentation-zoom');
                 setTimeout(() => {
-                    simulateTyping('21781', () => {
+                    simulateTyping(MODES[currentMode].defaultTeam, () => {
                         searchArea.classList.remove('presentation-zoom');
                         setTimeout(() => {
                             searchArea.classList.remove('presentation-zoom');
@@ -995,4 +1328,45 @@ function stopPresentation() {
     searchArea.classList.remove('presentation-zoom');
 }
 
+function switchMode(mode) {
+    if (mode === currentMode) return;
+    
+    currentMode = mode;
+    API_BASE_URL = MODES[currentMode].apiBase;
+
+    document.querySelectorAll('.mode-tab').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    document.querySelector(`[data-mode="${mode}"]`).classList.add('active');
+    
+    DOM.landingTitle.textContent = MODES[mode].title;
+    DOM.landingSubtitle.textContent = MODES[mode].subtitle;
+    
+    resetPage();
+    
+    clearData();
+}
+
+function resetPage() {
+    DOM.mainContent.classList.remove('visible');
+    DOM.landingHeader.classList.remove('searched');
+    DOM.teamNumberInput.value = '';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function clearData() {
+    DOM.teamBasicInfo.innerHTML = '';
+    DOM.teamStats.innerHTML = '';
+    DOM.statsContainer.innerHTML = '<h2>Event Statistics</h2>';
+    DOM.analyticsContainer.innerHTML = '<h2>Performance Analytics</h2><div class="charts-grid"></div>';
+    
+    DOM.statsContainer.classList.add('hidden');
+    DOM.analyticsContainer.classList.add('hidden');
+
+    destroyCharts();
+
+    apiCache.clear();
+}
+
 window.togglePresentationMode = togglePresentationMode;
+window.switchMode = switchMode;
