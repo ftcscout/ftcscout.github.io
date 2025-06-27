@@ -222,8 +222,13 @@ async function searchTeam() {
                 const teamData = await fetchTeamData(teamNumber, selectedYear);
                 const matchData = await fetchTeamMatches(teamNumber, selectedYear);
 
-                displayTeamInfo(teamData, matchData);
-                displayMatchData(matchData);
+                if (!matchData || Object.keys(matchData).length === 0) {
+                    console.warn('No FRC match data available, showing fallback');
+                    displayFRCFallback(teamNumber, selectedYear);
+                } else {
+                    displayTeamInfo(teamData, matchData);
+                    displayMatchData(matchData);
+                }
             } catch (apiError) {
                 console.warn('FRC API failed, showing fallback:', apiError);
                 displayFRCFallback(teamNumber, selectedYear);
@@ -432,6 +437,14 @@ async function fetchFRCTeamData(teamNumber, year) {
             console.log('FRC Stats Data:', statsData);
         } catch (statsError) {
             console.warn('FRC Stats not available for this team/year:', statsError.message);
+            statsData = {
+                opr: 0,
+                dpr: 0,
+                ccwm: 0,
+                avg_score: 0,
+                max_score: 0,
+                total_matches: 0
+            };
         }
         
         return {
@@ -780,6 +793,26 @@ function displayTeamInfo(teamData, matchData) {
                 </div>
             `;
         } else {
+            let totalMatches = 0;
+            let totalScore = 0;
+            let maxScore = 0;
+            
+            if (matchData) {
+                Object.values(matchData).forEach(eventData => {
+                    if (eventData.matches) {
+                        eventData.matches.forEach(match => {
+                            totalMatches++;
+                            const alliance = match.alliance.toLowerCase();
+                            const score = match[`${alliance}Score`] || 0;
+                            totalScore += score;
+                            if (score > maxScore) maxScore = score;
+                        });
+                    }
+                });
+            }
+            
+            const avgScore = totalMatches > 0 ? totalScore / totalMatches : 0;
+            
             statsDiv.innerHTML = `
                 <h3>Team Statistics (${MODES[currentMode].seasons.current} Season)</h3>
                 
@@ -815,15 +848,15 @@ function displayTeamInfo(teamData, matchData) {
                             </tr>
                             <tr>
                                 <td>Average Score</td>
-                                <td>${formatValue(stats.avg_score || 0)}</td>
+                                <td>${formatValue(avgScore)}</td>
                             </tr>
                             <tr>
                                 <td>Max Score</td>
-                                <td>${stats.max_score || '0'}</td>
+                                <td>${maxScore}</td>
                             </tr>
                             <tr>
                                 <td>Total Matches</td>
-                                <td>${stats.total_matches || '0'}</td>
+                                <td>${totalMatches}</td>
                             </tr>
                         </table>
                     </div>
@@ -912,7 +945,13 @@ function toggleEventMatches(eventCode) {
 }
 
 function createAnalytics(matchData) {
-    document.getElementById('analytics-container').classList.remove('hidden');
+    const analyticsContainer = document.getElementById('analytics-container');
+    if (!analyticsContainer) {
+        console.warn('Analytics container not found');
+        return;
+    }
+    
+    analyticsContainer.classList.remove('hidden');
     
     const allMatches = Object.values(matchData).flatMap(event => event.matches);
     
@@ -920,11 +959,24 @@ function createAnalytics(matchData) {
     if (chartInstances.phaseBreakdown) chartInstances.phaseBreakdown.destroy();
     if (chartInstances.winLoss) chartInstances.winLoss.destroy();
     if (chartInstances.performanceTrends) chartInstances.performanceTrends.destroy();
+
+    const scoreProgressionCanvas = document.getElementById('scoreProgressionChart');
+    const phaseBreakdownCanvas = document.getElementById('phaseBreakdownChart');
+    const performanceRadarCanvas = document.getElementById('performanceRadarChart');
+    const consistencyCanvas = document.getElementById('consistencyChart');
     
-    chartInstances.matchHistory = createMatchHistoryChart(allMatches);
-    chartInstances.phaseBreakdown = createScoringBreakdownChart(allMatches);
-    chartInstances.winLoss = createWinLossChart(allMatches);
-    chartInstances.performanceTrends = createPerformanceTrendsChart(allMatches);
+    if (scoreProgressionCanvas) {
+        chartInstances.matchHistory = createMatchHistoryChart(allMatches);
+    }
+    if (phaseBreakdownCanvas) {
+        chartInstances.phaseBreakdown = createScoringBreakdownChart(allMatches);
+    }
+    if (performanceRadarCanvas) {
+        chartInstances.winLoss = createWinLossChart(allMatches);
+    }
+    if (consistencyCanvas) {
+        chartInstances.performanceTrends = createPerformanceTrendsChart(allMatches);
+    }
 }
 
 function createMatchHistoryChart(matches) {
