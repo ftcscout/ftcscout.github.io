@@ -28,8 +28,6 @@ let API_BASE_URL = MODES[currentMode].apiBase;
 
 const FRC_API_KEY = 'pUm7ONNd4VrNmelSO4ZX8Muf24gGn7xMI1VE8jeohY8ODZfEDZOlPuoahrHr9m57';
 
-const CORS_PROXY = 'https://cors-anywhere.herokuapp.com/';
-
 const DOM = {
     mainContent: document.querySelector('.main-content'),
     landingHeader: document.querySelector('.landing-header'),
@@ -120,6 +118,66 @@ function destroyCharts() {
     });
 }
 
+function displayFRCFallback(teamNumber, year) {
+    const basicInfoDiv = document.getElementById('teamBasicInfo');
+    basicInfoDiv.innerHTML = `
+        <div class="team-header">
+            <div class="team-basic-info">
+                <h3>FRC Team ${teamNumber}</h3>
+                <p><strong>API Access Limited</strong></p>
+                <p>Due to browser security restrictions, FRC data requires server-side implementation.</p>
+            </div>
+            <div class="team-record">
+                <span class="record-label">Status</span>
+                <span class="record-numbers">Limited</span>
+            </div>
+        </div>
+    `;
+
+    const statsDiv = document.getElementById('teamStats');
+    statsDiv.innerHTML = `
+        <h3>FRC Team Information</h3>
+        <div class="stats-grid">
+            <div class="stats-section">
+                <h4>About FRC Data Access</h4>
+                <p>The Blue Alliance API requires server-side implementation to avoid CORS restrictions in web browsers.</p>
+                <p><strong>Current Limitations:</strong></p>
+                <ul>
+                    <li>Browser CORS policy blocks direct API access</li>
+                    <li>Public CORS proxies have rate limits</li>
+                    <li>Server-side proxy required for full access</li>
+                </ul>
+            </div>
+            <div class="stats-section">
+                <h4>Team Resources</h4>
+                <p>Visit these official resources for FRC Team ${teamNumber}:</p>
+                <ul>
+                    <li><a href="https://www.thebluealliance.com/team/${teamNumber}" target="_blank" class="resource-link">The Blue Alliance</a> - Official team page</li>
+                    <li><a href="https://frc-events.firstinspires.org/team/${teamNumber}" target="_blank" class="resource-link">FIRST Events</a> - Official event data</li>
+                    <li><a href="https://www.thebluealliance.com/apidocs" target="_blank" class="resource-link">TBA API Docs</a> - Developer documentation</li>
+                </ul>
+            </div>
+        </div>
+    `;
+
+    const statsContainer = document.getElementById('stats-container');
+    statsContainer.classList.remove('hidden');
+    statsContainer.innerHTML = `
+        <h2>FRC Event Information</h2>
+        <div class="info-box">
+            <p><strong>Event data requires server-side API access.</strong></p>
+            <p>For complete FRC team data, please visit:</p>
+            <ul>
+                <li><a href="https://www.thebluealliance.com/team/${teamNumber}" target="_blank">The Blue Alliance Team Page</a></li>
+                <li><a href="https://frc-events.firstinspires.org/team/${teamNumber}" target="_blank">FIRST Events Team Page</a></li>
+            </ul>
+        </div>
+    `;
+
+    const analyticsContainer = document.getElementById('analytics-container');
+    analyticsContainer.classList.add('hidden');
+}
+
 async function searchTeam() {
     const teamNumber = document.getElementById('teamNumber').value;
     if (!teamNumber) return;
@@ -150,8 +208,7 @@ async function searchTeam() {
             displayTeamInfo(teamData, matchData);
             displayMatchData(matchData);
         } else {
-            // FRC mode
-            createSeasonSelector(1992); // FRC starts from 1992
+            createSeasonSelector(1992);
             
             const selectorContainer = document.getElementById('seasonSelectorContainer');
             if (selectorContainer) {
@@ -160,16 +217,21 @@ async function searchTeam() {
             }
             
             const selectedYear = document.getElementById('seasonSelector')?.value || 2024;
-            const teamData = await fetchTeamData(teamNumber, selectedYear);
-            const matchData = await fetchTeamMatches(teamNumber, selectedYear);
+            
+            try {
+                const teamData = await fetchTeamData(teamNumber, selectedYear);
+                const matchData = await fetchTeamMatches(teamNumber, selectedYear);
 
-            displayTeamInfo(teamData, matchData);
-            displayMatchData(matchData);
+                displayTeamInfo(teamData, matchData);
+                displayMatchData(matchData);
+            } catch (apiError) {
+                console.warn('FRC API failed, showing fallback:', apiError);
+                displayFRCFallback(teamNumber, selectedYear);
+            }
         }
     } catch (error) {
         console.error('Error:', error);
         
-        // Show user-friendly error message
         const errorMessage = currentMode === 'frc' && error.message.includes('CORS') 
             ? 'FRC data is temporarily unavailable due to API restrictions. Please try again later or use FTC mode.'
             : `Error loading team data: ${error.message}`;
@@ -1404,18 +1466,39 @@ window.togglePresentationMode = togglePresentationMode;
 window.switchMode = switchMode;
 
 async function makeFRCRequest(url, headers = {}) {
-    const proxyUrl = CORS_PROXY + url;
-    const response = await fetch(proxyUrl, {
-        method: 'GET',
-        headers: {
-            'Origin': window.location.origin,
-            ...headers
+    const tbaHeaders = {
+        'X-TBA-Auth-Key': FRC_API_KEY,
+        'User-Agent': 'MechaSearch/1.0 (https://github.com/ftcscout/ftcscout.github.io)',
+        ...headers
+    };
+    
+    try {
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: tbaHeaders,
+            mode: 'cors'
+        });
+        
+        if (response.ok) {
+            return await response.json();
         }
-    });
-    
-    if (!response.ok) {
+        
+        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+        const proxyResponse = await fetch(proxyUrl, {
+            method: 'GET',
+            headers: {
+                'User-Agent': 'MechaSearch/1.0'
+            }
+        });
+        
+        if (proxyResponse.ok) {
+            return await proxyResponse.json();
+        }
+        
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        
+    } catch (error) {
+        console.error('FRC API request failed:', error);
+        throw error;
     }
-    
-    return response.json();
 }
