@@ -2,7 +2,7 @@ const MODES = {
     ftc: {
         name: 'FTC',
         apiBase: 'https://api.ftcscout.org/rest/v1',
-        title: 'MechaSearch (21781)',
+        title: 'MechaSearch',
         subtitle: 'Explore team statistics, match history, and performance analytics for FIRST Tech Challenge teams.',
         defaultTeam: '21781',
         seasons: {
@@ -13,7 +13,7 @@ const MODES = {
     frc: {
         name: 'FRC',
         apiBase: 'https://www.thebluealliance.com/api/v3',
-        title: 'MechaSearch (FRC)',
+        title: 'MechaSearch',
         subtitle: 'Explore team statistics, match history, and performance analytics for FIRST Robotics Competition teams.',
         defaultTeam: '21781',
         seasons: {
@@ -113,7 +113,7 @@ function destroyCharts() {
     [chartInstances.matchHistory, chartInstances.phaseBreakdown, chartInstances.winLoss, chartInstances.performanceTrends].forEach(chart => {
         if (chart) {
             chart.destroy();
-            chart = null;
+            // chart = null; // This line does not actually clear the reference in the object
         }
     });
 }
@@ -250,24 +250,25 @@ function createSeasonSelector(rookieYear) {
     if (!seasonSelector) return;
 
     const currentYear = MODES[currentMode].seasons.current;
-    const startYear = Math.max(rookieYear || MODES[currentMode].seasons.start, MODES[currentMode].seasons.start);
+    // For FRC, use rookieYear if available, else fallback to 1992
+    const startYear = currentMode === 'frc'
+        ? Math.max(rookieYear || MODES[currentMode].seasons.start, MODES[currentMode].seasons.start)
+        : Math.max(rookieYear || MODES[currentMode].seasons.start, MODES[currentMode].seasons.start);
+
     seasonSelector.innerHTML = '';
-    
     for (let year = currentYear; year >= startYear; year--) {
         const option = document.createElement('option');
         option.value = year;
         option.textContent = year;
         seasonSelector.appendChild(option);
     }
-    
+
     seasonSelector.onchange = async () => {
         const teamNumber = document.getElementById('teamNumber')?.value;
         if (!teamNumber) return;
-        
         const selectedYear = seasonSelector.value;
         const teamData = await fetchTeamData(teamNumber, selectedYear);
         const matchData = await fetchTeamMatches(teamNumber, selectedYear);
-        
         displayTeamInfo(teamData, matchData);
         displayMatchData(matchData);
     };
@@ -677,7 +678,6 @@ function displayTeamInfo(teamData, matchData) {
             if (eventData.matches) {
                 eventData.matches.forEach(match => {
                     let redScore, blueScore;
-                    
                     if (currentMode === 'ftc') {
                         redScore = match.redScore?.totalPointsNp || match.redScore?.totalPoints || 0;
                         blueScore = match.blueScore?.totalPointsNp || match.blueScore?.totalPoints || 0;
@@ -685,7 +685,6 @@ function displayTeamInfo(teamData, matchData) {
                         redScore = match.redScore || 0;
                         blueScore = match.blueScore || 0;
                     }
-                    
                     if (match.alliance?.toLowerCase() === 'red') {
                         if (redScore > blueScore) record.wins++;
                         else if (redScore < blueScore) record.losses++;
@@ -981,49 +980,41 @@ function createAnalytics(matchData) {
 
 function createMatchHistoryChart(matches) {
     const ctx = document.getElementById('scoreProgressionChart').getContext('2d');
-    
     const matchData = matches.map((match, index) => {
-        let auto, teleop, total;
-        
+        let auto = 0, teleOp = 0, total = 0;
         if (currentMode === 'ftc') {
             const alliance = match.alliance.toLowerCase();
             const score = match[`${alliance}Score`];
             auto = score?.autoPoints || 0;
-            teleop = score?.dcPoints || 0;
+            teleOp = score?.dcPoints || 0;
             total = score?.totalPointsNp || 0;
         } else {
             const alliance = match.alliance.toLowerCase();
             total = match[`${alliance}Score`] || 0;
             auto = 0;
-            teleop = total;
+            teleOp = total;
         }
-        
-        return {
-            auto: auto,
-            teleop: teleop,
-            total: total,
-            matchNumber: index + 1
-        };
+        return { auto, teleOp, total, matchNumber: index + 1 };
     });
 
     const datasets = [
         {
             label: currentMode === 'ftc' ? 'Auto' : 'Score',
-            data: matchData.map(m => m.auto),
-            backgroundColor: 'rgba(255, 206, 86, 0.8)',
+            data: matchData.map(m => currentMode === 'ftc' ? m.auto : m.total),
+            backgroundColor: currentMode === 'ftc' ? 'rgba(255, 206, 86, 0.8)' : 'rgba(75, 192, 192, 0.8)',
             stack: 'Stack 0',
         }
     ];
-    
+
     if (currentMode === 'ftc') {
         datasets.push({
             label: 'TeleOp',
-            data: matchData.map(m => m.teleop),
+            data: matchData.map(m => m.teleOp),
             backgroundColor: 'rgba(75, 192, 192, 0.8)',
             stack: 'Stack 0',
         });
     }
-    
+
     datasets.push({
         label: 'Match Average',
         data: matchData.map(() => {
@@ -1068,9 +1059,7 @@ function createMatchHistoryChart(matches) {
 
 function createScoringBreakdownChart(matches) {
     const ctx = document.getElementById('phaseBreakdownChart').getContext('2d');
-    
     let scoringData;
-    
     if (currentMode === 'ftc') {
         scoringData = matches.reduce((acc, match) => {
             const alliance = match.alliance.toLowerCase();
@@ -1081,17 +1070,7 @@ function createScoringBreakdownChart(matches) {
             }
             return acc;
         }, { auto: 0, teleop: 0 });
-    } else {
-        scoringData = matches.reduce((acc, match) => {
-            const alliance = match.alliance.toLowerCase();
-            const score = match[`${alliance}Score`] || 0;
-            acc.total += score;
-            return acc;
-        }, { total: 0 });
-    }
-
-    if (currentMode === 'ftc') {
-        const total = scoringData.auto + scoringData.teleop;
+        const total = scoringData.auto + scoringData.teleop || 1;
         const autoPercentage = (scoringData.auto / total * 100).toFixed(1);
         const teleopPercentage = (scoringData.teleop / total * 100).toFixed(1);
 
@@ -1131,6 +1110,12 @@ function createScoringBreakdownChart(matches) {
             }
         });
     } else {
+        scoringData = matches.reduce((acc, match) => {
+            const alliance = match.alliance.toLowerCase();
+            const score = match[`${alliance}Score`] || 0;
+            acc.total += score;
+            return acc;
+        }, { total: 0 });
         return new Chart(ctx, {
             type: 'doughnut',
             data: {
@@ -1167,10 +1152,8 @@ function createScoringBreakdownChart(matches) {
 
 function createWinLossChart(matches) {
     const ctx = document.getElementById('performanceRadarChart').getContext('2d');
-    
     const results = matches.reduce((acc, match) => {
         let redScore, blueScore;
-        
         if (currentMode === 'ftc') {
             redScore = match.redScore?.totalPointsNp || match.redScore?.totalPoints || 0;
             blueScore = match.blueScore?.totalPointsNp || match.blueScore?.totalPoints || 0;
@@ -1178,7 +1161,6 @@ function createWinLossChart(matches) {
             redScore = match.redScore || 0;
             blueScore = match.blueScore || 0;
         }
-        
         if (match.alliance.toLowerCase() === 'red') {
             if (redScore > blueScore) acc.won++;
             else if (redScore < blueScore) acc.lost++;
@@ -1188,11 +1170,8 @@ function createWinLossChart(matches) {
             else if (blueScore < redScore) acc.lost++;
             else acc.tie++;
         }
-        
         return acc;
     }, { won: 0, lost: 0, tie: 0 });
-
-    console.log('Match Results:', results);
 
     const total = matches.length;
     const winRate = total > 0 ? ((results.won / total) * 100).toFixed(1) : '0.0';
@@ -1216,23 +1195,22 @@ function createWinLossChart(matches) {
                 borderWidth: 1
             }]
         },
-        options: {
-            ...chartConfig,
-            plugins: {
-                title: {
-                    display: true,
-                    text: `${currentMode.toUpperCase()} Win/Loss Record (${winRate}% Win Rate)`,
-                    color: '#ffffff',
-                    font: { size: 16 }
+            options: {
+                ...chartConfig,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: `${currentMode.toUpperCase()} Win/Loss Record (${winRate}% Win Rate)`,
+                        color: '#ffffff',
+                        font: { size: 16 }
+                    }
                 }
             }
-        }
-    });
+        });
 }
 
 function createPerformanceTrendsChart(matches) {
     const ctx = document.getElementById('consistencyChart').getContext('2d');
-    
     const movingAverage = (data, windowSize) => {
         const result = [];
         for (let i = 0; i < data.length; i++) {
@@ -1281,18 +1259,18 @@ function createPerformanceTrendsChart(matches) {
                 }
             ]
         },
-        options: {
-            ...chartConfig,
-            plugins: {
-                title: {
-                    display: true,
-                    text: `${currentMode.toUpperCase()} Performance Trends`,
-                    color: '#ffffff',
-                    font: { size: 16 }
+            options: {
+                ...chartConfig,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: `${currentMode.toUpperCase()} Performance Trends`,
+                        color: '#ffffff',
+                        font: { size: 16 }
+                    }
                 }
             }
-        }
-    });
+        });
 }
 
 const PRESENTATION = {
