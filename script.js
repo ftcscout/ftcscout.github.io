@@ -113,9 +113,14 @@ function destroyCharts() {
     [chartInstances.matchHistory, chartInstances.phaseBreakdown, chartInstances.winLoss, chartInstances.performanceTrends].forEach(chart => {
         if (chart) {
             chart.destroy();
-            // chart = null; // This line does not actually clear the reference in the object
         }
     });
+    
+    // Clear the chart instances
+    chartInstances.matchHistory = null;
+    chartInstances.phaseBreakdown = null;
+    chartInstances.winLoss = null;
+    chartInstances.performanceTrends = null;
 }
 
 function displayFRCFallback(teamNumber, year) {
@@ -786,8 +791,16 @@ async function fetchFRCMatches(teamNumber, year) {
 }
 
 function determineResult(match) {
-    const redScore = match.redScore?.totalPointsNp || match.redScore?.totalPoints || 0;
-    const blueScore = match.blueScore?.totalPointsNp || match.blueScore?.totalPoints || 0;
+    let redScore, blueScore;
+    
+    if (currentMode === 'ftc') {
+        redScore = match.redScore?.totalPointsNp || match.redScore?.totalPoints || 0;
+        blueScore = match.blueScore?.totalPointsNp || match.blueScore?.totalPoints || 0;
+    } else {
+        // For FRC, scores are simple numbers
+        redScore = match.redScore || 0;
+        blueScore = match.blueScore || 0;
+    }
     
     if (match.alliance === 'RED') {
         if (redScore > blueScore) return 'Won';
@@ -1080,8 +1093,15 @@ function calculateConsistencyScore(matchData) {
     Object.values(matchData).forEach(eventData => {
         if (eventData.matches) {
             eventData.matches.forEach(match => {
-                const alliance = match.alliance.toLowerCase();
-                const score = match[`${alliance}Score`] || 0;
+                let score;
+                if (currentMode === 'ftc') {
+                    const alliance = match.alliance.toLowerCase();
+                    score = match[`${alliance}Score`] || 0;
+                } else {
+                    // For FRC, get the score based on alliance
+                    const isRed = match.alliance.toLowerCase() === 'red';
+                    score = isRed ? (match.redScore || 0) : (match.blueScore || 0);
+                }
                 if (score > 0) allScores.push(score);
             });
         }
@@ -1114,11 +1134,17 @@ function createMatchCard(match) {
                     </div>
                     <div class="score-display">
                         <div class="red-score ${match.alliance === 'RED' ? 'highlighted' : ''}">
-                            ${match.redScore !== undefined ? match.redScore : 'TBD'}
+                            ${currentMode === 'ftc' ? 
+                                (match.redScore?.totalPointsNp !== undefined ? match.redScore.totalPointsNp : 
+                                 match.redScore?.totalPoints !== undefined ? match.redScore.totalPoints : 'TBD') :
+                                (match.redScore !== undefined ? match.redScore : 'TBD')}
                         </div>
                         <div class="score-divider">-</div>
                         <div class="blue-score ${match.alliance === 'BLUE' ? 'highlighted' : ''}">
-                            ${match.blueScore !== undefined ? match.blueScore : 'TBD'}
+                            ${currentMode === 'ftc' ? 
+                                (match.blueScore?.totalPointsNp !== undefined ? match.blueScore.totalPointsNp : 
+                                 match.blueScore?.totalPoints !== undefined ? match.blueScore.totalPoints : 'TBD') :
+                                (match.blueScore !== undefined ? match.blueScore : 'TBD')}
                         </div>
                     </div>
                     <div class="match-result ${result.toLowerCase()}">
@@ -1177,6 +1203,13 @@ function createAnalytics(matchData) {
         return;
     }
     
+    // Check if we have valid match data
+    if (!matchData || Object.keys(matchData).length === 0) {
+        console.warn('No match data available for analytics');
+        analyticsContainer.classList.add('hidden');
+        return;
+    }
+    
     analyticsContainer.classList.remove('hidden');
     
     // Clear existing charts
@@ -1187,72 +1220,153 @@ function createAnalytics(matchData) {
 
     const allMatches = Object.values(matchData).flatMap(event => event.matches);
     
+    // Check if we have matches to analyze
+    if (!allMatches || allMatches.length === 0) {
+        console.warn('No matches available for analytics');
+        analyticsContainer.innerHTML = '<h2>Performance Analytics</h2><p>No match data available for analytics.</p>';
+        return;
+    }
+    
     // Create enhanced charts based on mode
     if (currentMode === 'ftc') {
+        console.log('Creating FTC analytics for', allMatches.length, 'matches');
         createFTCAnalytics(allMatches);
     } else {
+        console.log('Creating FRC analytics for', allMatches.length, 'matches');
         createFRCAnalytics(allMatches);
     }
 }
 
 function createFTCAnalytics(matches) {
-    const scoreProgressionCanvas = document.getElementById('scoreProgressionChart');
-    const phaseBreakdownCanvas = document.getElementById('phaseBreakdownChart');
-    const performanceRadarCanvas = document.getElementById('performanceRadarChart');
-    const consistencyCanvas = document.getElementById('consistencyChart');
-    
-    if (scoreProgressionCanvas) {
-        chartInstances.matchHistory = createMatchHistoryChart(matches);
-    }
-    if (phaseBreakdownCanvas) {
-        chartInstances.phaseBreakdown = createScoringBreakdownChart(matches);
-    }
-    if (performanceRadarCanvas) {
-        chartInstances.winLoss = createWinLossChart(matches);
-    }
-    if (consistencyCanvas) {
-        chartInstances.performanceTrends = createPerformanceTrendsChart(matches);
+    try {
+        console.log('Starting FTC analytics creation with', matches.length, 'matches');
+        console.log('Sample match data:', matches[0]);
+        
+        const scoreProgressionCanvas = document.getElementById('scoreProgressionChart');
+        const phaseBreakdownCanvas = document.getElementById('phaseBreakdownChart');
+        const performanceRadarCanvas = document.getElementById('performanceRadarChart');
+        const consistencyCanvas = document.getElementById('consistencyChart');
+        
+        console.log('Canvas elements found:', {
+            scoreProgression: !!scoreProgressionCanvas,
+            phaseBreakdown: !!phaseBreakdownCanvas,
+            performanceRadar: !!performanceRadarCanvas,
+            consistency: !!consistencyCanvas
+        });
+        
+        if (scoreProgressionCanvas) {
+            chartInstances.matchHistory = createMatchHistoryChart(matches);
+            console.log('Created match history chart:', !!chartInstances.matchHistory);
+        } else {
+            console.warn('Score progression chart canvas not found');
+        }
+        if (phaseBreakdownCanvas) {
+            chartInstances.phaseBreakdown = createScoringBreakdownChart(matches);
+            console.log('Created phase breakdown chart:', !!chartInstances.phaseBreakdown);
+        } else {
+            console.warn('Phase breakdown chart canvas not found');
+        }
+        if (performanceRadarCanvas) {
+            chartInstances.winLoss = createWinLossChart(matches);
+            console.log('Created win/loss chart:', !!chartInstances.winLoss);
+        } else {
+            console.warn('Performance radar chart canvas not found');
+        }
+        if (consistencyCanvas) {
+            chartInstances.performanceTrends = createPerformanceTrendsChart(matches);
+            console.log('Created performance trends chart:', !!chartInstances.performanceTrends);
+        } else {
+            console.warn('Consistency chart canvas not found');
+        }
+        
+        console.log('FTC analytics creation completed');
+    } catch (error) {
+        console.error('Error creating FTC analytics:', error);
+        const analyticsContainer = document.getElementById('analytics-container');
+        if (analyticsContainer) {
+            analyticsContainer.innerHTML = '<h2>Performance Analytics</h2><p>Error creating analytics charts. Please try again.</p>';
+        }
     }
 }
 
 function createFRCAnalytics(matches) {
-    const scoreProgressionCanvas = document.getElementById('scoreProgressionChart');
-    const phaseBreakdownCanvas = document.getElementById('phaseBreakdownChart');
-    const performanceRadarCanvas = document.getElementById('performanceRadarChart');
-    const consistencyCanvas = document.getElementById('consistencyChart');
-    
-    if (scoreProgressionCanvas) {
-        chartInstances.matchHistory = createFRCMatchHistoryChart(matches);
-    }
-    if (phaseBreakdownCanvas) {
-        chartInstances.phaseBreakdown = createFRCPhaseBreakdownChart(matches);
-    }
-    if (performanceRadarCanvas) {
-        chartInstances.winLoss = createFRCWinLossChart(matches);
-    }
-    if (consistencyCanvas) {
-        chartInstances.performanceTrends = createFRCPerformanceTrendsChart(matches);
+    try {
+        console.log('Starting FRC analytics creation with', matches.length, 'matches');
+        console.log('Sample match data:', matches[0]);
+        
+        const scoreProgressionCanvas = document.getElementById('scoreProgressionChart');
+        const phaseBreakdownCanvas = document.getElementById('phaseBreakdownChart');
+        const performanceRadarCanvas = document.getElementById('performanceRadarChart');
+        const consistencyCanvas = document.getElementById('consistencyChart');
+        
+        console.log('Canvas elements found:', {
+            scoreProgression: !!scoreProgressionCanvas,
+            phaseBreakdown: !!phaseBreakdownCanvas,
+            performanceRadar: !!performanceRadarCanvas,
+            consistency: !!consistencyCanvas
+        });
+        
+        if (scoreProgressionCanvas) {
+            chartInstances.matchHistory = createFRCMatchHistoryChart(matches);
+            console.log('Created match history chart:', !!chartInstances.matchHistory);
+        } else {
+            console.warn('Score progression chart canvas not found');
+        }
+        if (phaseBreakdownCanvas) {
+            chartInstances.phaseBreakdown = createFRCPhaseBreakdownChart(matches);
+            console.log('Created phase breakdown chart:', !!chartInstances.phaseBreakdown);
+        } else {
+            console.warn('Phase breakdown chart canvas not found');
+        }
+        if (performanceRadarCanvas) {
+            chartInstances.winLoss = createFRCWinLossChart(matches);
+            console.log('Created win/loss chart:', !!chartInstances.winLoss);
+        } else {
+            console.warn('Performance radar chart canvas not found');
+        }
+        if (consistencyCanvas) {
+            chartInstances.performanceTrends = createFRCPerformanceTrendsChart(matches);
+            console.log('Created performance trends chart:', !!chartInstances.performanceTrends);
+        } else {
+            console.warn('Consistency chart canvas not found');
+        }
+        
+        console.log('FRC analytics creation completed');
+    } catch (error) {
+        console.error('Error creating FRC analytics:', error);
+        const analyticsContainer = document.getElementById('analytics-container');
+        if (analyticsContainer) {
+            analyticsContainer.innerHTML = '<h2>Performance Analytics</h2><p>Error creating analytics charts. Please try again.</p>';
+        }
     }
 }
 
 function createFRCMatchHistoryChart(matches) {
-    const ctx = document.getElementById('scoreProgressionChart').getContext('2d');
-    const matchData = matches.map((match, index) => {
-        const alliance = match.alliance.toLowerCase();
-        const totalScore = match[`${alliance}Score`] || 0;
-        const autoScore = match.autoPoints || 0;
-        const teleopScore = match.teleopPoints || 0;
-        const endgameScore = match.endgamePoints || 0;
+    try {
+        const canvas = document.getElementById('scoreProgressionChart');
+        if (!canvas) {
+            console.error('Score progression chart canvas not found');
+            return null;
+        }
         
-        return { 
-            autoScore, 
-            teleopScore, 
-            endgameScore, 
-            totalScore, 
-            matchNumber: index + 1,
-            matchType: match.matchType
-        };
-    });
+        const ctx = canvas.getContext('2d');
+        const matchData = matches.map((match, index) => {
+            // For FRC, get the score based on alliance
+            const isRed = match.alliance.toLowerCase() === 'red';
+            const totalScore = isRed ? match.redScore : match.blueScore;
+            const autoScore = match.autoPoints || 0;
+            const teleopScore = match.teleopPoints || 0;
+            const endgameScore = match.endgamePoints || 0;
+            
+            return { 
+                autoScore, 
+                teleopScore, 
+                endgameScore, 
+                totalScore: totalScore || 0, 
+                matchNumber: index + 1,
+                matchType: match.matchType
+            };
+        });
 
     const datasets = [
         {
@@ -1325,10 +1439,21 @@ function createFRCMatchHistoryChart(matches) {
             }
         }
     });
+    } catch (error) {
+        console.error('Error creating FRC match history chart:', error);
+        return null;
+    }
 }
 
 function createFRCPhaseBreakdownChart(matches) {
-    const ctx = document.getElementById('phaseBreakdownChart').getContext('2d');
+    try {
+        const canvas = document.getElementById('phaseBreakdownChart');
+        if (!canvas) {
+            console.error('Phase breakdown chart canvas not found');
+            return null;
+        }
+        
+        const ctx = canvas.getContext('2d');
     
     const phaseData = matches.reduce((acc, match) => {
         const alliance = match.alliance.toLowerCase();
@@ -1392,10 +1517,21 @@ function createFRCPhaseBreakdownChart(matches) {
             }
         }
     });
+    } catch (error) {
+        console.error('Error creating FRC phase breakdown chart:', error);
+        return null;
+    }
 }
 
 function createFRCWinLossChart(matches) {
-    const ctx = document.getElementById('performanceRadarChart').getContext('2d');
+    try {
+        const canvas = document.getElementById('performanceRadarChart');
+        if (!canvas) {
+            console.error('Performance radar chart canvas not found');
+            return null;
+        }
+        
+        const ctx = canvas.getContext('2d');
     
     // Enhanced win/loss analysis with match type breakdown
     const results = {
@@ -1487,10 +1623,21 @@ function createFRCWinLossChart(matches) {
             }
         }
     });
+    } catch (error) {
+        console.error('Error creating FRC win/loss chart:', error);
+        return null;
+    }
 }
 
 function createFRCPerformanceTrendsChart(matches) {
-    const ctx = document.getElementById('consistencyChart').getContext('2d');
+    try {
+        const canvas = document.getElementById('consistencyChart');
+        if (!canvas) {
+            console.error('Consistency chart canvas not found');
+            return null;
+        }
+        
+        const ctx = canvas.getContext('2d');
     
     const movingAverage = (data, windowSize) => {
         const result = [];
@@ -1504,8 +1651,9 @@ function createFRCPerformanceTrendsChart(matches) {
     };
 
     const scores = matches.map(match => {
-        const alliance = match.alliance.toLowerCase();
-        return match[`${alliance}Score`] || 0;
+        // For FRC, get the score based on alliance
+        const isRed = match.alliance.toLowerCase() === 'red';
+        return isRed ? (match.redScore || 0) : (match.blueScore || 0);
     });
 
     const autoScores = matches.map(match => match.autoPoints || 0);
@@ -1603,6 +1751,10 @@ function createFRCPerformanceTrendsChart(matches) {
             }
         }
     });
+    } catch (error) {
+        console.error('Error creating FRC performance trends chart:', error);
+        return null;
+    }
 }
 
 // Add missing FTC chart functions
@@ -2068,6 +2220,12 @@ function clearData() {
     destroyCharts();
 
     apiCache.clear();
+    
+    // Reset chart instances
+    chartInstances.matchHistory = null;
+    chartInstances.phaseBreakdown = null;
+    chartInstances.winLoss = null;
+    chartInstances.performanceTrends = null;
 }
 
 window.togglePresentationMode = togglePresentationMode;
