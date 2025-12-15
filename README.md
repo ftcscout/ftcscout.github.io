@@ -1,102 +1,44 @@
-# MechaSearch - FTC & FRC Team Analytics
+# MechaSearch — FTC & FRC Team Search + Analytics
 
-A comprehensive team statistics and analytics platform for both FIRST Tech Challenge (FTC) and FIRST Robotics Competition (FRC) teams.
+MechaSearch is a single-page HTML/CSS/JS app that lets you look up FIRST Tech Challenge (FTC) and FIRST Robotics Competition (FRC) teams, view their season history, and explore match-by-match analytics. FTC works out of the box; FRC requires a The Blue Alliance (TBA) API key.
 
-## Features
+## What it does
+- **Dual modes:** Toggle FTC/FRC from the top tabs; UI reuses the same flow for both.
+- **Team lookup:** Enter a team number to fetch profile, events, awards, rankings, and match history.
+- **Dynamic seasons:** Season list is generated from current year/rookie year or API status; switching seasons reloads data.
+- **Analytics:** Bottom-of-page Chart.js visuals for score progression, phase mix, win/loss, and consistency (FRC data is adapted to the same chart shapes).
+- **Resilient fetch:** Local cache, CORS-aware fallback for TBA, inline error messaging when data is missing.
 
-- **Dual Mode Support**: Switch between FTC and FRC modes seamlessly
-- **Team Statistics**: View detailed team information, rankings, and performance metrics
-- **Match History**: Browse through all matches with detailed scoring breakdowns
-- **Performance Analytics**: Interactive charts showing scoring trends, win/loss records, and performance consistency
-- **Season Selection**: View data from multiple seasons
-- **Real-time Data**: Live data from FTC Scout and The Blue Alliance APIs
+## Quick start
+1) Open `index.html` in a modern browser (no build tooling).  
+2) Search an FTC team number — results and analytics render automatically.  
+3) To use FRC mode, supply a TBA API key (see below), switch to FRC, and search a team.
 
-## Setup
+### Set your FRC API key
+Create a Read API key in your [TBA account](https://www.thebluealliance.com/account), then provide it to the app in **one** of these ways:
+- Add a meta tag in `index.html`: `<meta name="tba-api-key" content="YOUR_KEY">`
+- Set in dev tools: `localStorage.setItem('tbaApiKey','YOUR_KEY')`
+- Expose globally before `script.js`: `window.FRC_API_KEY = 'YOUR_KEY'`
 
-### FRC API Key Setup
+### Data sources
+- **FTC:** `https://api.ftcscout.org/rest/v1` (no auth)
+- **FRC:** `https://www.thebluealliance.com/api/v3` (requires API key; browser CORS may require the built-in proxy fallbacks)
 
-To use FRC functionality, you need to obtain an API key from The Blue Alliance:
+## Using the app
+- Pick FTC or FRC from the tabs.
+- Enter a team number and click **Search Team**.
+- Use the season dropdown to jump between seasons; charts and stats reload automatically.
+- Expand events to see match breakdowns; analytics update from the same data.
 
-1. Go to [The Blue Alliance Account Dashboard](https://www.thebluealliance.com/account)
-2. Sign in with your Google account
-3. Navigate to the "Read API Keys" section
-4. Generate a new API key
-5. Replace `'your_frc_api_key_here'` in `script.js` with your actual API key
+## Troubleshooting (FRC)
+- “Failed to fetch” / CORS: try reloading; if blocked, use a different browser or host locally with the provided proxy fallbacks.
+- Empty analytics: no match data returned for that season/event — pick another season or verify the team competed.
+- Bad key: regenerate in TBA, then update your meta/localStorage/global key.
 
-```javascript
-// In script.js, line ~30
-const FRC_API_KEY = 'your_actual_api_key_here';
-```
-
-### CORS Proxy Solution
-
-Due to CORS restrictions, FRC API calls use a CORS proxy service (`cors-anywhere.herokuapp.com`). This allows the application to access The Blue Alliance API from a web browser.
-
-**Note**: The CORS proxy service may have rate limits or temporary outages. If FRC data is not loading:
-1. Try refreshing the page
-2. Switch to FTC mode temporarily
-3. Check the browser console for error messages
-
-### API Documentation
-
-- **FTC API**: [FTC Scout API](https://api.ftcscout.org/rest/v1)
-- **FRC API**: [The Blue Alliance API v3](https://www.thebluealliance.com/apidocs)
-
-## Usage
-
-1. **Switch Modes**: Use the tabs in the top-left corner to switch between FTC and FRC modes
-2. **Search Teams**: Enter a team number and click "Search Team"
-3. **View Statistics**: Browse team information, match history, and performance analytics
-4. **Season Selection**: Use the dropdown to view data from different seasons
-5. **Interactive Charts**: Explore performance trends and scoring breakdowns
-
-## Technical Details
-
-### FTC Mode
-- Uses FTC Scout API
-- Supports seasons from 2015 to present
-- Shows auto/teleop scoring breakdowns
-- Displays FTC-specific statistics
-
-### FRC Mode
-- Uses The Blue Alliance API v3
-- Supports seasons from 1992 to present
-- Shows total scoring (auto/teleop combined)
-- Displays FRC-specific statistics (OPR, DPR, CCWM)
-- Uses CORS proxy for browser compatibility
-
-### Data Sources
-- **FTC**: FTC Scout API (no authentication required)
-- **FRC**: The Blue Alliance API v3 (requires API key, uses CORS proxy)
-
-## Troubleshooting
-
-### FRC Data Not Loading
-- Check that your API key is correctly set in `script.js`
-- Verify the API key is valid by testing it directly with The Blue Alliance API
-- Check browser console for CORS or network errors
-- Try refreshing the page or switching modes
-
-### CORS Errors
-- The application uses a CORS proxy to access FRC data
-- If the proxy is down, FRC mode will show an error message
-- FTC mode will continue to work normally
-
-## Browser Compatibility
-
-- Modern browsers with ES6+ support
-- Chrome, Firefox, Safari, Edge
-- Mobile responsive design
-
-## Development
-
-The application is built with vanilla JavaScript and uses:
-- Chart.js for data visualization
-- CSS Grid and Flexbox for layout
-- Fetch API for data retrieval
-- Local caching for improved performance
-- CORS proxy for FRC API access
+## Tech notes
+- Vanilla JS, Chart.js, CSS Grid/Flexbox; no build step.
+- Shared adapter layer normalizes FTC/FRC responses into common render shapes without merging schemas.
+- Chart instances are destroyed/recreated on each team/season/mode change to avoid stale data.
 
 ## License
-
-This project is open source and available under the MIT License. 
+MIT
