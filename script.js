@@ -1,3 +1,10 @@
+const deriveCurrentSeason = (mode) => {
+    const now = new Date();
+    const year = now.getFullYear();
+    // FTC seasons typically roll over after summer; FRC aligns with the calendar year
+    return mode === 'ftc' && now.getMonth() >= 7 ? year: year;
+};
+
 const MODES = {
     ftc: {
         name: 'FTC',
@@ -6,7 +13,7 @@ const MODES = {
         subtitle: 'Explore team statistics, match history, and performance analytics for FIRST Tech Challenge teams.',
         defaultTeam: '21781',
         seasons: {
-            current: 2024,
+            current: deriveCurrentSeason('ftc'),
             start: 2015
         }
     },
@@ -17,7 +24,7 @@ const MODES = {
         subtitle: 'Explore team statistics, match history, and performance analytics for FIRST Robotics Competition teams.',
         defaultTeam: '21781',
         seasons: {
-            current: 2024,
+            current: deriveCurrentSeason('frc'),
             start: 1992
         }
     }
@@ -26,13 +33,14 @@ const MODES = {
 let currentMode = 'ftc';
 let API_BASE_URL = MODES[currentMode].apiBase;
 
-const FRC_API_KEY = 'pUm7ONNd4VrNmelSO4ZX8Muf24gGn7xMI1VE8jeohY8ODZfEDZOlPuoahrHr9m57';
+const DEFAULT_FRC_API_KEY = 'pUm7ONNd4VrNmelSO4ZX8Muf24gGn7xMI1VE8jeohY8ODZfEDZOlPuoahrHr9m57';
 
 const DOM = {
     mainContent: document.querySelector('.main-content'),
     landingHeader: document.querySelector('.landing-header'),
     teamNumberInput: document.getElementById('teamNumber'),
     seasonSelector: document.getElementById('seasonSelector'),
+    seasonSelectorContainer: document.querySelector('.season-selector-container'),
     statsContainer: document.getElementById('stats-container'),
     analyticsContainer: document.getElementById('analytics-container'),
     teamBasicInfo: document.getElementById('teamBasicInfo'),
@@ -45,6 +53,106 @@ const DOM = {
         performanceRadar: document.getElementById('performanceRadarChart'),
         consistency: document.getElementById('consistencyChart')
     }
+};
+
+const state = {
+    selectedSeason: MODES[currentMode].seasons.current,
+    seasonYears: [],
+    prefetchedTeam: null
+};
+
+const getFrcApiKey = () => {
+    const metaKey = document.querySelector('meta[name="tba-api-key"]')?.content;
+    const key = (window.FRC_API_KEY || localStorage.getItem('tbaApiKey') || metaKey || DEFAULT_FRC_API_KEY || '').trim();
+    return key;
+};
+
+const getFrcHeaders = (extra = {}) => {
+    const apiKey = getFrcApiKey();
+    if (!apiKey) {
+        throw new Error('Missing FRC API key. Add window.FRC_API_KEY or localStorage.tbaApiKey.');
+    }
+    return {
+        'X-TBA-Auth-Key': apiKey,
+        'Accept': 'application/json',
+        ...extra
+    };
+};
+
+const MODE_ADAPTERS = {
+    ftc: {
+        id: 'ftc',
+        apiBase: MODES.ftc.apiBase,
+        seasons: MODES.ftc.seasons,
+        async fetchProfile(teamNumber) {
+            const team = await fetchJson(`${this.apiBase}/teams/${teamNumber}`);
+            return { rookieYear: team.rookieYear, team };
+        },
+        async latestSeasonYear() {
+            try {
+                const seasons = await fetchJson(`${this.apiBase}/seasons`);
+                if (Array.isArray(seasons) && seasons.length) {
+                    const years = seasons
+                        .map(season => Number(season.season || season.year || season))
+                        .filter(Boolean);
+                    if (years.length) {
+                        return Math.max(...years);
+                    }
+                }
+            } catch (error) {
+                console.warn('FTC season lookup failed, using fallback year:', error.message);
+            }
+            return deriveCurrentSeason('ftc');
+        },
+        async fetchTeam(teamNumber, season, context = {}) {
+            return fetchFTCTeamData(teamNumber, season, context.team);
+        },
+        async fetchMatches(teamNumber, season) {
+            return fetchFTCMatches(teamNumber, season);
+        }
+    },
+    frc: {
+        id: 'frc',
+        apiBase: MODES.frc.apiBase,
+        seasons: MODES.frc.seasons,
+        async fetchProfile(teamNumber) {
+            const team = await makeFRCRequest(`${this.apiBase}/team/frc${teamNumber}`);
+            return { rookieYear: team.rookie_year, team };
+        },
+        async latestSeasonYear() {
+            try {
+                const status = await makeFRCRequest(`${this.apiBase}/status`);
+                if (status?.current_season) {
+                    return status.current_season;
+                }
+            } catch (error) {
+                console.warn('FRC season lookup failed, using fallback year:', error.message);
+            }
+            return deriveCurrentSeason('frc');
+        },
+        async fetchTeam(teamNumber, season, context = {}) {
+            return fetchFRCTeamData(teamNumber, season, context.team);
+        },
+        async fetchMatches(teamNumber, season) {
+            return fetchFRCMatches(teamNumber, season);
+        }
+    }
+};
+
+const fetchJson = async (url, options = {}) => {
+    const response = await fetch(url, options);
+    if (!response.ok) {
+        throw new Error(`Request failed (${response.status}): ${response.statusText}`);
+    }
+    return response.json();
+};
+
+const buildSeasonList = (latestYear, startYear) => {
+    const years = [];
+    for (let year = latestYear; year >= startYear; year--) {
+        years.push(year);
+    }
+    return years;
 };
 
 const chartInstances = {
@@ -66,6 +174,109 @@ const getCachedData = async (url, ttl = 300000) => {
     apiCache.set(url, { data, timestamp: Date.now() });
     return data;
 };
+
+async function resolveSeasonOptions(teamNumber) {
+    const adapter = MODE_ADAPTERS[currentMode];
+    const [profile, latestSeason] = await Promise.all([
+        adapter.fetchProfile(teamNumber).catch(error => {
+            console.warn(`${adapter.id.toUpperCase()} profile lookup failed:`, error.message);
+            return {};
+        }),
+        adapter.latestSeasonYear().catch(() => deriveCurrentSeason(currentMode))
+    ]);
+
+    const startYear = Math.max(adapter.seasons.start, profile?.rookieYear || adapter.seasons.start);
+    const effectiveLatest = latestSeason || deriveCurrentSeason(currentMode);
+    const seasons = buildSeasonList(effectiveLatest, Math.min(startYear, effectiveLatest));
+
+    MODES[currentMode].seasons.current = effectiveLatest;
+    state.seasonYears = seasons.length ? seasons : [effectiveLatest];
+    state.selectedSeason = state.seasonYears[0];
+    state.prefetchedTeam = profile?.team || null;
+
+    return {
+        seasons: state.seasonYears,
+        selectedYear: state.selectedSeason,
+        prefetchedTeam: state.prefetchedTeam
+    };
+}
+
+function toggleSeasonSelectorVisibility(show) {
+    if (!DOM.seasonSelectorContainer) return;
+    DOM.seasonSelectorContainer.classList.toggle('hidden', !show);
+    DOM.seasonSelectorContainer.classList.toggle('visible', show);
+}
+
+function renderSeasonSelector(seasons, selectedYear) {
+    if (!DOM.seasonSelector) return;
+
+    DOM.seasonSelector.innerHTML = '';
+    seasons.forEach(year => {
+        const option = document.createElement('option');
+        option.value = year;
+        option.textContent = year;
+        DOM.seasonSelector.appendChild(option);
+    });
+
+    const yearToUse = selectedYear ?? seasons[0] ?? MODES[currentMode].seasons.current;
+    if (yearToUse) {
+        DOM.seasonSelector.value = yearToUse;
+        state.selectedSeason = yearToUse;
+    }
+
+    DOM.seasonSelector.onchange = handleSeasonChange;
+}
+
+async function loadTeamAndMatches(teamNumber, season, prefetchedTeam) {
+    const adapter = MODE_ADAPTERS[currentMode];
+    const baseTeamData = prefetchedTeam || state.prefetchedTeam;
+    const [teamData, matchData] = await Promise.all([
+        adapter.fetchTeam(teamNumber, season, { team: baseTeamData }),
+        adapter.fetchMatches(teamNumber, season)
+    ]);
+
+    if (currentMode === 'frc') {
+        mergeRankingsIntoEvents(teamData, matchData);
+    }
+    state.prefetchedTeam = baseTeamData || teamData;
+
+    return { teamData, matchData };
+}
+
+function mergeRankingsIntoEvents(teamData, matchData) {
+    if (!teamData?.stats?.rankings || !matchData) return;
+
+    Object.entries(teamData.stats.rankings).forEach(([eventKey, ranking]) => {
+        if (matchData[eventKey]?.details?.stats) {
+            Object.assign(matchData[eventKey].details.stats, {
+                rank: ranking.rank ?? matchData[eventKey].details.stats.rank,
+                total: ranking.total ?? matchData[eventKey].details.stats.total,
+                rp: ranking.rp ?? matchData[eventKey].details.stats.rp,
+                tb1: ranking.tb1 ?? matchData[eventKey].details.stats.tb1,
+                tb2: ranking.tb2 ?? matchData[eventKey].details.stats.tb2
+            });
+        }
+    });
+}
+
+function renderErrorState(error) {
+    const message = typeof error === 'string' ? error : error?.message || 'Unable to load data right now.';
+    DOM.teamBasicInfo.innerHTML = `
+        <div class="info-box error-box">
+            <p>${message}</p>
+        </div>
+    `;
+    DOM.teamStats.innerHTML = '';
+
+    DOM.statsContainer.classList.remove('hidden');
+    DOM.statsContainer.innerHTML = `
+        <h2>Event Statistics</h2>
+        <div class="info-box error-box">
+            <p>${message}</p>
+        </div>
+    `;
+    DOM.analyticsContainer.classList.add('hidden');
+}
 
 const chartConfig = {
     responsive: true,
@@ -123,7 +334,7 @@ function destroyCharts() {
     chartInstances.performanceTrends = null;
 }
 
-function displayFRCFallback(teamNumber, year) {
+function displayFRCFallback(teamNumber, year, reason = '') {
     const basicInfoDiv = document.getElementById('teamBasicInfo');
     basicInfoDiv.innerHTML = `
         <div class="team-header">
@@ -131,6 +342,7 @@ function displayFRCFallback(teamNumber, year) {
                 <h3>FRC Team ${teamNumber}</h3>
                 <p><strong>API Access Limited</strong></p>
                 <p>Due to browser security restrictions, FRC data requires server-side implementation.</p>
+                ${reason ? `<p><strong>Note:</strong> ${reason}</p>` : ''}
             </div>
             <div class="team-record">
                 <span class="record-label">Status</span>
@@ -146,6 +358,7 @@ function displayFRCFallback(teamNumber, year) {
             <div class="stats-section">
                 <h4>About FRC Data Access</h4>
                 <p>The Blue Alliance API requires server-side implementation to avoid CORS restrictions in web browsers.</p>
+                ${reason ? `<p><strong>Why you're seeing this:</strong> ${reason}</p>` : ''}
                 <p><strong>Current Limitations:</strong></p>
                 <ul>
                     <li>Browser CORS policy blocks direct API access</li>
@@ -171,6 +384,7 @@ function displayFRCFallback(teamNumber, year) {
         <h2>FRC Event Information</h2>
         <div class="info-box">
             <p><strong>Event data requires server-side API access.</strong></p>
+            ${reason ? `<p>${reason}</p>` : ''}
             <p>For complete FRC team data, please visit:</p>
             <ul>
                 <li><a href="https://www.thebluealliance.com/team/${teamNumber}" target="_blank">The Blue Alliance Team Page</a></li>
@@ -184,7 +398,7 @@ function displayFRCFallback(teamNumber, year) {
 }
 
 async function searchTeam() {
-    const teamNumber = document.getElementById('teamNumber').value;
+    const teamNumber = document.getElementById('teamNumber').value.trim();
     if (!teamNumber) return;
 
     const mainContent = document.querySelector('.main-content');
@@ -194,89 +408,68 @@ async function searchTeam() {
     if (landingHeader) landingHeader.classList.add('searched');
 
     try {
-        if (currentMode === 'ftc') {
-            const teamResponse = await fetch(`${API_BASE_URL}/teams/${teamNumber}`);
-            const basicTeamData = await teamResponse.json();
-            
-            createSeasonSelector(basicTeamData.rookieYear || 2024);
-            
-            const selectorContainer = document.getElementById('seasonSelectorContainer');
-            if (selectorContainer) {
-                selectorContainer.classList.remove('hidden');
-                selectorContainer.classList.add('visible');
-            }
-            
-            const selectedYear = document.getElementById('seasonSelector')?.value || 2024;
-            const teamData = await fetchTeamData(teamNumber, selectedYear);
-            const matchData = await fetchTeamMatches(teamNumber, selectedYear);
+        const seasonContext = await resolveSeasonOptions(teamNumber);
+        renderSeasonSelector(seasonContext.seasons, seasonContext.selectedYear);
+        toggleSeasonSelectorVisibility(true);
 
-            displayTeamInfo(teamData, matchData);
-            displayMatchData(matchData);
-        } else {
-            createSeasonSelector(1992);
-            
-            const selectorContainer = document.getElementById('seasonSelectorContainer');
-            if (selectorContainer) {
-                selectorContainer.classList.remove('hidden');
-                selectorContainer.classList.add('visible');
-            }
-            
-            const selectedYear = document.getElementById('seasonSelector')?.value || 2024;
-            
-            try {
-                const teamData = await fetchTeamData(teamNumber, selectedYear);
-                const matchData = await fetchTeamMatches(teamNumber, selectedYear);
+        const { teamData, matchData } = await loadTeamAndMatches(
+            teamNumber,
+            state.selectedSeason,
+            state.prefetchedTeam
+        );
 
-                if (!matchData || Object.keys(matchData).length === 0) {
-                    console.warn('No FRC match data available, showing fallback');
-                    displayFRCFallback(teamNumber, selectedYear);
-                } else {
-                    displayTeamInfo(teamData, matchData);
-                    displayMatchData(matchData);
-                }
-            } catch (apiError) {
-                console.warn('FRC API failed, showing fallback:', apiError);
-                displayFRCFallback(teamNumber, selectedYear);
-            }
+        if (currentMode === 'frc' && (!matchData || Object.keys(matchData).length === 0)) {
+            console.warn('No FRC match data available, showing fallback');
+            displayFRCFallback(teamNumber, state.selectedSeason, `No FRC match data available for ${state.selectedSeason}.`);
+            return;
         }
+
+        displayTeamInfo(teamData, matchData, state.selectedSeason);
+        displayMatchData(matchData);
     } catch (error) {
         console.error('Error:', error);
-        
-        const errorMessage = currentMode === 'frc' && error.message.includes('CORS') 
-            ? 'FRC data is temporarily unavailable due to API restrictions. Please try again later or use FTC mode.'
-            : `Error loading team data: ${error.message}`;
-            
-        alert(errorMessage);
+
+        if (currentMode === 'frc') {
+            displayFRCFallback(
+                teamNumber,
+                state.selectedSeason || MODES[currentMode].seasons.current,
+                error?.message || 'FRC data could not be loaded.'
+            );
+            return;
+        }
+
+        renderErrorState(error);
     }
 }
 
-function createSeasonSelector(rookieYear) {
-    const seasonSelector = document.getElementById('seasonSelector');
-    if (!seasonSelector) return;
+async function handleSeasonChange() {
+    const teamNumber = document.getElementById('teamNumber')?.value.trim();
+    if (!teamNumber) return;
+    state.selectedSeason = DOM.seasonSelector?.value || state.selectedSeason;
 
-    const currentYear = MODES[currentMode].seasons.current;
-    // For FRC, use rookieYear if available, else fallback to 1992
-    const startYear = currentMode === 'frc'
-        ? Math.max(rookieYear || MODES[currentMode].seasons.start, MODES[currentMode].seasons.start)
-        : Math.max(rookieYear || MODES[currentMode].seasons.start, MODES[currentMode].seasons.start);
+    try {
+        const { teamData, matchData } = await loadTeamAndMatches(
+            teamNumber,
+            state.selectedSeason,
+            state.prefetchedTeam
+        );
 
-    seasonSelector.innerHTML = '';
-    for (let year = currentYear; year >= startYear; year--) {
-        const option = document.createElement('option');
-        option.value = year;
-        option.textContent = year;
-        seasonSelector.appendChild(option);
-    }
+        if (currentMode === 'frc' && (!matchData || Object.keys(matchData).length === 0)) {
+            console.warn('No FRC match data available, showing fallback');
+            displayFRCFallback(teamNumber, state.selectedSeason, `No FRC match data available for ${state.selectedSeason}.`);
+            return;
+        }
 
-    seasonSelector.onchange = async () => {
-        const teamNumber = document.getElementById('teamNumber')?.value;
-        if (!teamNumber) return;
-        const selectedYear = seasonSelector.value;
-        const teamData = await fetchTeamData(teamNumber, selectedYear);
-        const matchData = await fetchTeamMatches(teamNumber, selectedYear);
-        displayTeamInfo(teamData, matchData);
+        displayTeamInfo(teamData, matchData, state.selectedSeason);
         displayMatchData(matchData);
-    };
+    } catch (error) {
+        console.warn('Season change failed:', error);
+        if (currentMode === 'frc') {
+            displayFRCFallback(teamNumber, state.selectedSeason, error?.message || 'FRC data could not be loaded.');
+        } else {
+            renderErrorState(error);
+        }
+    }
 }
 
 function displayMatchData(matchData) {
@@ -293,7 +486,10 @@ function displayMatchData(matchData) {
         const eventSection = document.createElement('div');
         eventSection.className = 'event-section';
         
-        const stats = eventData.details.stats;
+        const stats = eventData.details?.stats || {};
+        const wins = stats.wins || 0;
+        const losses = stats.losses || 0;
+        const ties = stats.ties || 0;
         
         const header = document.createElement('div');
         header.className = 'event-header';
@@ -308,14 +504,20 @@ function displayMatchData(matchData) {
         `;
         
         if (currentMode === 'ftc') {
-            headerHTML += `<p>R${stats.rank} | ${stats.wins}-${stats.losses}-${stats.ties} | RP:${stats.rp.toFixed(2)} | TB:${stats.tb1.toFixed(1)}/${stats.tb2.toFixed(1)}</p>`;
+            const rp = Number.isFinite(stats.rp) ? stats.rp.toFixed(2) : '0.00';
+            const tb1 = Number.isFinite(stats.tb1) ? stats.tb1.toFixed(1) : '0.0';
+            const tb2 = Number.isFinite(stats.tb2) ? stats.tb2.toFixed(1) : '0.0';
+            headerHTML += `<p>R${stats.rank ?? '-'} | ${wins}-${losses}-${ties} | RP:${rp} | TB:${tb1}/${tb2}</p>`;
         } else {
             // Enhanced FRC stats display
-            const avgScore = stats.avgScore ? stats.avgScore.toFixed(1) : '0.0';
+            const avgScore = Number.isFinite(stats.avgScore) ? stats.avgScore.toFixed(1) : '0.0';
             const maxScore = stats.maxScore || 0;
+            const autoAvg = Number.isFinite(stats.autoAvg) ? stats.autoAvg.toFixed(1) : '0.0';
+            const teleopAvg = Number.isFinite(stats.teleopAvg) ? stats.teleopAvg.toFixed(1) : '0.0';
+            const endgameAvg = Number.isFinite(stats.endgameAvg) ? stats.endgameAvg.toFixed(1) : '0.0';
             headerHTML += `
-                <p>${stats.wins}-${stats.losses}-${stats.ties} | Avg: ${avgScore} | Max: ${maxScore}</p>
-                <p>Auto: ${stats.autoAvg ? stats.autoAvg.toFixed(1) : '0.0'} | TeleOp: ${stats.teleopAvg ? stats.teleopAvg.toFixed(1) : '0.0'} | Endgame: ${stats.endgameAvg ? stats.endgameAvg.toFixed(1) : '0.0'}</p>
+                <p>${wins}-${losses}-${ties} | Avg: ${avgScore} | Max: ${maxScore}</p>
+                <p>Auto: ${autoAvg} | TeleOp: ${teleopAvg} | Endgame: ${endgameAvg}</p>
             `;
         }
         
@@ -399,28 +601,22 @@ function getMatchTypeDisplay(matchType) {
     }
 }
 
-async function fetchTeamData(teamNumber, year) {
+async function fetchTeamData(teamNumber, year, prefetchedTeam) {
     try {
         console.log(`Fetching ${currentMode.toUpperCase()} data for team:`, teamNumber);
-        
-        if (currentMode === 'ftc') {
-            return await fetchFTCTeamData(teamNumber, year);
-        } else {
-            return await fetchFRCTeamData(teamNumber, year);
-        }
+        const adapter = MODE_ADAPTERS[currentMode];
+        return await adapter.fetchTeam(teamNumber, year, { team: prefetchedTeam });
     } catch (error) {
         console.error('Error fetching team data:', error);
         throw error;
     }
 }
 
-async function fetchFTCTeamData(teamNumber, year) {
-    const teamResponse = await fetch(`${API_BASE_URL}/teams/${teamNumber}`);
-    const teamData = await teamResponse.json();
+async function fetchFTCTeamData(teamNumber, year, prefetchedTeam) {
+    const teamData = prefetchedTeam || await fetchJson(`${API_BASE_URL}/teams/${teamNumber}`);
     console.log('FTC Team Data:', teamData);
 
-    const eventsResponse = await fetch(`${API_BASE_URL}/teams/${teamNumber}/events/${year}`);
-    const eventsData = await eventsResponse.json();
+    const eventsData = await fetchJson(`${API_BASE_URL}/teams/${teamNumber}/events/${year}`);
     console.log('FTC Events Data:', eventsData);
     
     let eventStats = null;
@@ -434,8 +630,7 @@ async function fetchFTCTeamData(teamNumber, year) {
     
     const statsUrl = `${API_BASE_URL}/teams/${teamNumber}/quick-stats?season=${year}`;
     console.log('Fetching FTC quick stats from:', statsUrl);
-    const statsResponse = await fetch(statsUrl);
-    const quickStats = await statsResponse.json();
+    const quickStats = await fetchJson(statsUrl);
     console.log('FTC Quick Stats:', quickStats);
 
     const stats = {
@@ -451,16 +646,17 @@ async function fetchFTCTeamData(teamNumber, year) {
     };
 }
 
-async function fetchFRCTeamData(teamNumber, year) {
-    const headers = {
-        'X-TBA-Auth-Key': FRC_API_KEY
-    };
+async function fetchFRCTeamData(teamNumber, year, prefetchedTeam) {
+    const headers = getFrcHeaders();
     
     const teamKey = `frc${teamNumber}`;
     
     try {
-        const teamData = await makeFRCRequest(`${API_BASE_URL}/team/${teamKey}`, headers);
+        const teamData = prefetchedTeam || await makeFRCRequest(`${API_BASE_URL}/team/${teamKey}`, headers);
         console.log('FRC Team Data:', teamData);
+        const rookieYear = teamData.rookie_year || teamData.rookieYear;
+        const stateProv = teamData.state_prov || teamData.state;
+        const teamName = teamData.nickname || teamData.name;
 
         const eventsData = await makeFRCRequest(`${API_BASE_URL}/team/${teamKey}/events/${year}`, headers);
         console.log('FRC Events Data:', eventsData);
@@ -517,11 +713,11 @@ async function fetchFRCTeamData(teamNumber, year) {
         
         return {
             number: teamNumber,
-            name: teamData.nickname || teamData.name,
+            name: teamName,
             city: teamData.city,
-            state: teamData.state_prov,
+            state: stateProv,
             country: teamData.country,
-            rookieYear: teamData.rookie_year,
+            rookieYear: rookieYear,
             stats: {
                 ...statsData,
                 events: eventsData,
@@ -537,11 +733,8 @@ async function fetchFRCTeamData(teamNumber, year) {
 
 async function fetchTeamMatches(teamNumber, year) {
     try {
-        if (currentMode === 'ftc') {
-            return await fetchFTCMatches(teamNumber, year);
-        } else {
-            return await fetchFRCMatches(teamNumber, year);
-        }
+        const adapter = MODE_ADAPTERS[currentMode];
+        return await adapter.fetchMatches(teamNumber, year);
     } catch (error) {
         console.error('Error fetching match data:', error);
         return {};
@@ -633,9 +826,7 @@ async function fetchFTCMatches(teamNumber, year) {
 }
 
 async function fetchFRCMatches(teamNumber, year) {
-    const headers = {
-        'X-TBA-Auth-Key': FRC_API_KEY
-    };
+    const headers = getFrcHeaders();
     
     const teamKey = `frc${teamNumber}`;
     
@@ -816,8 +1007,9 @@ function determineResult(match) {
     return 'N/A';
 }
 
-function displayTeamInfo(teamData, matchData) {
+function displayTeamInfo(teamData, matchData, season = state.selectedSeason) {
     const record = { wins: 0, losses: 0, ties: 0 };
+    const seasonLabel = season || MODES[currentMode].seasons.current;
     
     if (matchData) {
         Object.values(matchData).forEach(eventData => {
@@ -845,11 +1037,12 @@ function displayTeamInfo(teamData, matchData) {
         });
     }
 
+    const teamNumberLabel = teamData.number || teamData.teamNumber || teamData.key || teamData.team_key || 'Unknown';
     const basicInfoDiv = document.getElementById('teamBasicInfo');
     basicInfoDiv.innerHTML = `
         <div class="team-header">
             <div class="team-basic-info">
-                <h3>${teamData.number} - ${teamData.name || 'Unknown Team'}</h3>
+                <h3>${teamNumberLabel} - ${teamData.name || 'Unknown Team'}</h3>
                 <p><strong>Location:</strong> ${[
                     teamData.city,
                     teamData.state,
@@ -892,7 +1085,7 @@ function displayTeamInfo(teamData, matchData) {
         
         if (currentMode === 'ftc') {
             statsDiv.innerHTML = `
-                <h3>Team Statistics (${MODES[currentMode].seasons.current} Season)</h3>
+                <h3>Team Statistics (${seasonLabel} Season)</h3>
                 
                 <div class="stats-grid">
                     <div class="stats-section">
@@ -998,7 +1191,7 @@ function displayTeamInfo(teamData, matchData) {
             const consistencyScore = calculateConsistencyScore(matchData);
             
             statsDiv.innerHTML = `
-                <h3>Team Statistics (${MODES[currentMode].seasons.current} Season)</h3>
+                <h3>Team Statistics (${seasonLabel} Season)</h3>
                 
                 <div class="stats-grid">
                     <div class="stats-section">
@@ -1196,6 +1389,77 @@ function toggleEventMatches(eventCode) {
     }
 }
 
+const toNumber = (value) => {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : 0;
+};
+
+// Ensure analytics section has the expected canvases before rendering (FTC structure reused for FRC).
+function ensureAnalyticsScaffold() {
+    const analyticsContainer = document.getElementById('analytics-container');
+    if (!analyticsContainer) return;
+
+    const grid = analyticsContainer.querySelector('.charts-grid');
+    const missingGrid = !grid;
+    if (missingGrid) {
+        analyticsContainer.innerHTML = `
+            <h2>Performance Analytics</h2>
+            <div class="charts-grid">
+                <div class="chart-container"><canvas id="scoreProgressionChart"></canvas></div>
+                <div class="chart-container"><canvas id="phaseBreakdownChart"></canvas></div>
+                <div class="chart-container"><canvas id="performanceRadarChart"></canvas></div>
+                <div class="chart-container"><canvas id="consistencyChart"></canvas></div>
+            </div>
+        `;
+        return;
+    }
+
+    const required = [
+        { id: 'scoreProgressionChart', wrapperClass: 'chart-container' },
+        { id: 'phaseBreakdownChart', wrapperClass: 'chart-container' },
+        { id: 'performanceRadarChart', wrapperClass: 'chart-container' },
+        { id: 'consistencyChart', wrapperClass: 'chart-container' }
+    ];
+
+    required.forEach(({ id, wrapperClass }) => {
+        if (!document.getElementById(id)) {
+            const wrapper = document.createElement('div');
+            wrapper.className = wrapperClass;
+            const canvas = document.createElement('canvas');
+            canvas.id = id;
+            wrapper.appendChild(canvas);
+            grid.appendChild(wrapper);
+        }
+    });
+}
+
+// Normalize FRC matches into Chart.js-friendly rows while keeping raw data intact.
+function normalizeFrcMatchesForCharts(rawMatches = []) {
+    return rawMatches.map((match, index) => {
+        const alliance = (match.alliance || 'Red').toLowerCase();
+        const matchType = (match.matchType || match.comp_level || 'qm').toString().toUpperCase();
+        const matchNumber = match.matchNumber || match.match_number || index + 1;
+        const redScore = toNumber(match.redScore);
+        const blueScore = toNumber(match.blueScore);
+        const totalScore = alliance === 'red' ? redScore : blueScore;
+
+        return {
+            ...match,
+            alliance,
+            matchType,
+            matchNumber,
+            matchLabel: `${matchType} ${matchNumber}`,
+            autoPoints: toNumber(match.autoPoints),
+            teleopPoints: toNumber(match.teleopPoints),
+            endgamePoints: toNumber(match.endgamePoints),
+            foulPoints: toNumber(match.foulPoints),
+            redScore,
+            blueScore,
+            totalScore
+        };
+    });
+}
+
 function createAnalytics(matchData) {
     const analyticsContainer = document.getElementById('analytics-container');
     if (!analyticsContainer) {
@@ -1206,11 +1470,13 @@ function createAnalytics(matchData) {
     // Check if we have valid match data
     if (!matchData || Object.keys(matchData).length === 0) {
         console.warn('No match data available for analytics');
-        analyticsContainer.classList.add('hidden');
+        analyticsContainer.classList.remove('hidden');
+        analyticsContainer.innerHTML = '<h2>Performance Analytics</h2><p>No match data available for analytics.</p>';
         return;
     }
     
     analyticsContainer.classList.remove('hidden');
+    ensureAnalyticsScaffold();
     
     // Clear existing charts
     if (chartInstances.matchHistory) chartInstances.matchHistory.destroy();
@@ -1291,8 +1557,9 @@ function createFTCAnalytics(matches) {
 
 function createFRCAnalytics(matches) {
     try {
-        console.log('Starting FRC analytics creation with', matches.length, 'matches');
-        console.log('Sample match data:', matches[0]);
+        const normalizedMatches = normalizeFrcMatchesForCharts(matches);
+        console.log('Starting FRC analytics creation with', normalizedMatches.length, 'matches');
+        console.log('Sample match data:', normalizedMatches[0]);
         
         const scoreProgressionCanvas = document.getElementById('scoreProgressionChart');
         const phaseBreakdownCanvas = document.getElementById('phaseBreakdownChart');
@@ -1307,25 +1574,25 @@ function createFRCAnalytics(matches) {
         });
         
         if (scoreProgressionCanvas) {
-            chartInstances.matchHistory = createFRCMatchHistoryChart(matches);
+            chartInstances.matchHistory = createFRCMatchHistoryChart(normalizedMatches);
             console.log('Created match history chart:', !!chartInstances.matchHistory);
         } else {
             console.warn('Score progression chart canvas not found');
         }
         if (phaseBreakdownCanvas) {
-            chartInstances.phaseBreakdown = createFRCPhaseBreakdownChart(matches);
+            chartInstances.phaseBreakdown = createFRCPhaseBreakdownChart(normalizedMatches);
             console.log('Created phase breakdown chart:', !!chartInstances.phaseBreakdown);
         } else {
             console.warn('Phase breakdown chart canvas not found');
         }
         if (performanceRadarCanvas) {
-            chartInstances.winLoss = createFRCWinLossChart(matches);
+            chartInstances.winLoss = createFRCWinLossChart(normalizedMatches);
             console.log('Created win/loss chart:', !!chartInstances.winLoss);
         } else {
             console.warn('Performance radar chart canvas not found');
         }
         if (consistencyCanvas) {
-            chartInstances.performanceTrends = createFRCPerformanceTrendsChart(matches);
+            chartInstances.performanceTrends = createFRCPerformanceTrendsChart(normalizedMatches);
             console.log('Created performance trends chart:', !!chartInstances.performanceTrends);
         } else {
             console.warn('Consistency chart canvas not found');
@@ -1350,23 +1617,12 @@ function createFRCMatchHistoryChart(matches) {
         }
         
         const ctx = canvas.getContext('2d');
-        const matchData = matches.map((match, index) => {
-            // For FRC, get the score based on alliance
-            const isRed = match.alliance.toLowerCase() === 'red';
-            const totalScore = isRed ? match.redScore : match.blueScore;
-            const autoScore = match.autoPoints || 0;
-            const teleopScore = match.teleopPoints || 0;
-            const endgameScore = match.endgamePoints || 0;
-            
-            return { 
-                autoScore, 
-                teleopScore, 
-                endgameScore, 
-                totalScore: totalScore || 0, 
-                matchNumber: index + 1,
-                matchType: match.matchType
-            };
-        });
+        const matchData = normalizeFrcMatchesForCharts(matches);
+
+        if (!matchData.length) {
+            console.warn('No FRC match data available for history chart');
+            return null;
+        }
 
     const datasets = [
         {
@@ -1404,7 +1660,7 @@ function createFRCMatchHistoryChart(matches) {
     return new Chart(ctx, {
         type: 'bar',
         data: {
-            labels: matchData.map(m => `${m.matchType.toUpperCase()} ${m.matchNumber}`),
+            labels: matchData.map(m => m.matchLabel || `Match ${m.matchNumber || ''}`),
             datasets: datasets
         },
         options: {
@@ -1454,18 +1710,17 @@ function createFRCPhaseBreakdownChart(matches) {
         }
         
         const ctx = canvas.getContext('2d');
-    
-    const phaseData = matches.reduce((acc, match) => {
-        const alliance = match.alliance.toLowerCase();
-        const autoScore = match.autoPoints || 0;
-        const teleopScore = match.teleopPoints || 0;
-        const endgameScore = match.endgamePoints || 0;
-        const foulScore = match.foulPoints || 0;
-        
-        acc.auto += autoScore;
-        acc.teleop += teleopScore;
-        acc.endgame += endgameScore;
-        acc.fouls += foulScore;
+        const cleanMatches = normalizeFrcMatchesForCharts(matches);
+        if (!cleanMatches.length) {
+            console.warn('No FRC match data available for phase breakdown');
+            return null;
+        }
+
+    const phaseData = cleanMatches.reduce((acc, match) => {
+        acc.auto += match.autoPoints;
+        acc.teleop += match.teleopPoints;
+        acc.endgame += match.endgamePoints;
+        acc.fouls += match.foulPoints;
         return acc;
     }, { auto: 0, teleop: 0, endgame: 0, fouls: 0 });
     
@@ -1532,6 +1787,11 @@ function createFRCWinLossChart(matches) {
         }
         
         const ctx = canvas.getContext('2d');
+        const cleanMatches = normalizeFrcMatchesForCharts(matches);
+        if (!cleanMatches.length) {
+            console.warn('No FRC match data available for win/loss chart');
+            return null;
+        }
     
     // Enhanced win/loss analysis with match type breakdown
     const results = {
@@ -1540,10 +1800,10 @@ function createFRCWinLossChart(matches) {
         overall: { won: 0, lost: 0, tie: 0 }
     };
     
-    matches.forEach(match => {
+    cleanMatches.forEach(match => {
         let redScore, blueScore;
-        redScore = match.redScore || 0;
-        blueScore = match.blueScore || 0;
+        redScore = match.redScore;
+        blueScore = match.blueScore;
         
         let result;
         if (match.alliance.toLowerCase() === 'red') {
@@ -1558,7 +1818,8 @@ function createFRCWinLossChart(matches) {
         
         results.overall[result]++;
         
-        if (match.matchType === 'qm') {
+        const level = (match.matchType || '').toString().toUpperCase();
+        if (level === 'QM') {
             results.qualification[result]++;
         } else {
             results.playoff[result]++;
@@ -1638,6 +1899,11 @@ function createFRCPerformanceTrendsChart(matches) {
         }
         
         const ctx = canvas.getContext('2d');
+        const cleanMatches = normalizeFrcMatchesForCharts(matches);
+        if (!cleanMatches.length) {
+            console.warn('No FRC match data available for performance trends');
+            return null;
+        }
     
     const movingAverage = (data, windowSize) => {
         const result = [];
@@ -1650,16 +1916,11 @@ function createFRCPerformanceTrendsChart(matches) {
         return result;
     };
 
-    const scores = matches.map(match => {
-        // For FRC, get the score based on alliance
-        const isRed = match.alliance.toLowerCase() === 'red';
-        return isRed ? (match.redScore || 0) : (match.blueScore || 0);
-    });
-
-    const autoScores = matches.map(match => match.autoPoints || 0);
-    const teleopScores = matches.map(match => match.teleopPoints || 0);
-    const endgameScores = matches.map(match => match.endgamePoints || 0);
-    const foulScores = matches.map(match => match.foulPoints || 0);
+    const scores = cleanMatches.map(match => match.totalScore);
+    const autoScores = cleanMatches.map(match => match.autoPoints);
+    const teleopScores = cleanMatches.map(match => match.teleopPoints);
+    const endgameScores = cleanMatches.map(match => match.endgamePoints);
+    const foulScores = cleanMatches.map(match => match.foulPoints);
 
     const trendLine = movingAverage(scores, 3);
     const autoTrend = movingAverage(autoScores, 3);
@@ -1670,7 +1931,7 @@ function createFRCPerformanceTrendsChart(matches) {
     return new Chart(ctx, {
         type: 'line',
         data: {
-            labels: matches.map((_, i) => `Match ${i + 1}`),
+            labels: cleanMatches.map((_, i) => `Match ${i + 1}`),
             datasets: [
                 {
                     label: 'Total Score',
@@ -1963,8 +2224,18 @@ function createPerformanceTrendsChart(matches) {
         const alliance = match.alliance.toLowerCase();
         return match[`${alliance}Score`]?.totalPointsNp || 0;
     });
+    const autoScores = matches.map(match => {
+        const alliance = match.alliance.toLowerCase();
+        return match[`${alliance}Score`]?.autoPoints || 0;
+    });
+    const teleopScores = matches.map(match => {
+        const alliance = match.alliance.toLowerCase();
+        return match[`${alliance}Score`]?.dcPoints || 0;
+    });
 
     const trendLine = movingAverage(scores, 3);
+    const autoTrend = movingAverage(autoScores, 3);
+    const teleopTrend = movingAverage(teleopScores, 3);
 
     return new Chart(ctx, {
         type: 'line',
@@ -1984,6 +2255,39 @@ function createPerformanceTrendsChart(matches) {
                     data: trendLine,
                     borderColor: 'rgba(255, 99, 132, 1)',
                     borderWidth: 2,
+                    pointRadius: 0,
+                    fill: false
+                },
+                // FTC-specific phase insight: track auto vs teleop over time
+                {
+                    label: 'Auto',
+                    data: autoScores,
+                    borderColor: 'rgba(255, 206, 86, 1)',
+                    backgroundColor: 'rgba(255, 206, 86, 0.1)',
+                    pointRadius: 2,
+                    fill: false
+                },
+                {
+                    label: 'TeleOp',
+                    data: teleopScores,
+                    borderColor: 'rgba(153, 102, 255, 1)',
+                    backgroundColor: 'rgba(153, 102, 255, 0.1)',
+                    pointRadius: 2,
+                    fill: false
+                },
+                {
+                    label: 'Auto (3-Match Avg)',
+                    data: autoTrend,
+                    borderColor: 'rgba(255, 206, 86, 0.7)',
+                    borderDash: [5, 5],
+                    pointRadius: 0,
+                    fill: false
+                },
+                {
+                    label: 'TeleOp (3-Match Avg)',
+                    data: teleopTrend,
+                    borderColor: 'rgba(153, 102, 255, 0.7)',
+                    borderDash: [5, 5],
                     pointRadius: 0,
                     fill: false
                 }
@@ -2186,6 +2490,8 @@ function switchMode(mode) {
     if (mode === currentMode) return;
     
     currentMode = mode;
+    MODES[currentMode].seasons.current = deriveCurrentSeason(currentMode);
+    state.selectedSeason = MODES[currentMode].seasons.current;
     API_BASE_URL = MODES[currentMode].apiBase;
 
     document.querySelectorAll('.mode-tab').forEach(tab => {
@@ -2213,6 +2519,10 @@ function clearData() {
     DOM.teamStats.innerHTML = '';
     DOM.statsContainer.innerHTML = '<h2>Event Statistics</h2>';
     DOM.analyticsContainer.innerHTML = '<h2>Performance Analytics</h2><div class="charts-grid"></div>';
+    if (DOM.seasonSelector) {
+        DOM.seasonSelector.innerHTML = '';
+    }
+    toggleSeasonSelectorVisibility(false);
     
     DOM.statsContainer.classList.add('hidden');
     DOM.analyticsContainer.classList.add('hidden');
@@ -2220,6 +2530,9 @@ function clearData() {
     destroyCharts();
 
     apiCache.clear();
+    state.selectedSeason = MODES[currentMode].seasons.current;
+    state.prefetchedTeam = null;
+    state.seasonYears = [];
     
     // Reset chart instances
     chartInstances.matchHistory = null;
@@ -2233,38 +2546,30 @@ window.switchMode = switchMode;
 
 async function makeFRCRequest(url, headers = {}) {
     const tbaHeaders = {
-        'X-TBA-Auth-Key': FRC_API_KEY,
+        ...getFrcHeaders(),
         'User-Agent': 'MechaSearch/1.0 (https://github.com/ftcscout/ftcscout.github.io)',
         ...headers
     };
-    
-    try {
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: tbaHeaders,
-            mode: 'cors'
-        });
-        
-        if (response.ok) {
-            return await response.json();
-        }
-        
-        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-        const proxyResponse = await fetch(proxyUrl, {
-            method: 'GET',
-            headers: {
-                'User-Agent': 'MechaSearch/1.0'
+
+    const attempts = [
+        { url, options: { method: 'GET', headers: tbaHeaders, mode: 'cors' } },
+        { url: `https://corsproxy.io/?${encodeURIComponent(url)}`, options: { method: 'GET', headers: tbaHeaders, mode: 'cors' } },
+        { url: `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, options: { method: 'GET', headers: tbaHeaders } }
+    ];
+
+    let lastError;
+    for (const attempt of attempts) {
+        try {
+            const response = await fetch(attempt.url, attempt.options);
+            if (response.ok) {
+                return await response.json();
             }
-        });
-        
-        if (proxyResponse.ok) {
-            return await proxyResponse.json();
+            lastError = new Error(`HTTP ${response.status}: ${response.statusText}`);
+        } catch (error) {
+            lastError = error;
         }
-        
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        
-    } catch (error) {
-        console.error('FRC API request failed:', error);
-        throw error;
     }
+
+    console.error('FRC API request failed:', lastError);
+    throw lastError;
 }

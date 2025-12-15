@@ -2111,6 +2111,12 @@ section {
     margin: 0.5rem 0;
 }
 
+.error-box {
+    border-color: #ff6b6b;
+    background: rgba(255, 107, 107, 0.08);
+    color: #ffdede;
+}
+
 .resource-link {
     color: var(--dark-blue);
     text-decoration: none;
