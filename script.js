@@ -2,7 +2,8 @@ const deriveCurrentSeason = (mode) => {
     const now = new Date();
     const year = now.getFullYear();
     // FTC seasons typically roll over after summer; FRC aligns with the calendar year
-    return mode === 'ftc' && now.getMonth() >= 7 ? year: year;
+    return year; //year is just current year for both modes regardless of month according to rest api for both
+    //return mode === 'ftc' && now.getMonth() >= 7 ? year: year;
 };
 
 const MODES = {
